@@ -1,0 +1,4 @@
+RewriteEngine On
+RewriteCond %{HTTPS} off [OR]
+RewriteCond %{HTTPS} on
+RewriteRule ^(.*)$ http://127.0.0.1:3002/$1 [P,L]
