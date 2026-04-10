@@ -1,0 +1,33 @@
+name: Deploy to Digital Ocean
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            # Navegar a la carpeta del proyecto (asegúrate de que existe)
+            cd /var/www/lezcom-landing || { echo "La carpeta /var/www/lezcom-landing no existe"; exit 1; }
+            
+            # Actualizar código
+            git pull origin main
+            
+            # Instalar dependencias y compilar
+            npm install
+            npm run build
+            
+            # Reiniciar la aplicación con PM2
+            pm2 restart lezcom-landing || pm2 start npm --name "lezcom-landing" -- start
