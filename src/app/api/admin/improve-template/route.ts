@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
     const prompt = `Eres un experto en email marketing B2B, copywriting de ventas y entregabilidad de correos electrónicos (email deliverability). Tu misión es analizar y mejorar plantillas HTML de correo para que:
 1. NO sean clasificadas como "Promociones" o "Spam" por Gmail y otros clientes de correo.

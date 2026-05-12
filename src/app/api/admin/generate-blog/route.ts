@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
     const prompt = `Eres un redactor experto en marketing de contenidos, redacción SEO (Search Engine Optimization) y copywriter profesional para el sector industrial, comercial y gastronómico.
 Tu misión es generar un artículo de blog altamente optimizado para buscadores (Google SEO) sobre una empresa chilena de fabricación de soluciones en acero inoxidable llamada "Lezcom SpA" (o simplemente Lezcom).
