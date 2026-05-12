@@ -107,160 +107,202 @@ export default function BlogPostDetail() {
     <div style={{ backgroundColor: "#f8fafc", minHeight: "100vh" }}>
       
       {/* SECCIÓN ARTÍCULO */}
-      <article style={{ padding: "40px 5% 80px 5%", maxWidth: "900px", margin: "0 auto" }}>
+      {/* CONTENEDOR FLEX PRINCIPAL */}
+      <div className="blog-flex-container" style={{ display: "flex", gap: "40px", maxWidth: "1200px", margin: "0 auto", padding: "40px 5% 80px 5%" }}>
         
-        {/* Enlace Volver */}
-        <Link 
-          href="/blog" 
-          style={{ 
-            display: "inline-flex", 
-            alignItems: "center", 
-            gap: "6px", 
-            fontSize: "0.9rem", 
-            color: "#64748b", 
-            textDecoration: "none", 
-            fontWeight: "bold",
-            marginBottom: "30px",
-            transition: "color 0.2s"
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.color = "#3b82f6"}
-          onMouseLeave={(e) => e.currentTarget.style.color = "#64748b"}
-        >
-          ⬅️ Volver a todos los artículos
-        </Link>
-
-        {/* Metadatos */}
-        <div style={{ display: "flex", gap: "12px", fontSize: "0.85rem", color: "#64748b", fontWeight: "600", marginBottom: "12px" }}>
-          <span>📅 {post.fecha ? new Date(post.fecha.seconds ? post.fecha.seconds * 1000 : post.fecha).toLocaleDateString("es-CL") : ""}</span>
-          <span>•</span>
-          <span>⏱️ {post.leido}</span>
-        </div>
-
-        {/* Título Principal */}
-        <h1 
-          style={{ 
-            fontSize: "clamp(2rem, 5vw, 3rem)", 
-            fontWeight: "800", 
-            color: "#0f172a", 
-            lineHeight: "1.2", 
-            margin: "0 0 20px 0" 
-          }}
-        >
-          {post.titulo}
-        </h1>
-
-        {/* Resumen */}
-        <p 
-          style={{ 
-            fontSize: "1.15rem", 
-            lineHeight: "1.6", 
-            color: "#475569", 
-            fontStyle: "italic", 
-            margin: "0 0 35px 0",
-            borderLeft: "4px solid #cbd5e1",
-            paddingLeft: "16px"
-          }}
-        >
-          {post.resumen}
-        </p>
-
-        {/* Imagen principal */}
-        {post.imagen && (
-          <div 
+        {/* COLUMNA IZQUIERDA: CONTENIDO DEL ARTÍCULO (70%) */}
+        <article style={{ flex: "2.3 1 0%", minWidth: "0px" }}>
+          {/* Enlace Volver */}
+          <Link 
+            href="/blog" 
             style={{ 
-              width: "100%", 
-              height: "clamp(220px, 45vh, 450px)", 
-              borderRadius: "16px", 
-              overflow: "hidden", 
-              marginBottom: "40px",
-              boxShadow: "0 10px 30px rgba(15, 23, 42, 0.05)"
+              display: "inline-flex", 
+              alignItems: "center", 
+              gap: "6px", 
+              fontSize: "0.9rem", 
+              color: "#64748b", 
+              textDecoration: "none", 
+              fontWeight: "bold",
+              marginBottom: "30px",
+              transition: "color 0.2s"
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.color = "#3b82f6"}
+            onMouseLeave={(e) => e.currentTarget.style.color = "#64748b"}
+          >
+            ⬅️ Volver a todos los artículos
+          </Link>
+
+          {/* Metadatos */}
+          <div style={{ display: "flex", gap: "12px", fontSize: "0.85rem", color: "#64748b", fontWeight: "600", marginBottom: "12px" }}>
+            <span>📅 {post.fecha ? new Date(post.fecha.seconds ? post.fecha.seconds * 1000 : post.fecha).toLocaleDateString("es-CL") : ""}</span>
+            <span>•</span>
+            <span>⏱️ {post.leido}</span>
+          </div>
+
+          {/* Título Principal */}
+          <h1 
+            style={{ 
+              fontSize: "clamp(2rem, 4vw, 2.8rem)", 
+              fontWeight: "800", 
+              color: "#0f172a", 
+              lineHeight: "1.2", 
+              margin: "0 0 20px 0" 
             }}
           >
-            <img 
-              src={post.imagen} 
-              alt={post.titulo} 
-              style={{ width: "100%", height: "100%", objectFit: "cover" }} 
-              onError={(e: any) => {
-                e.target.src = "https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=1200&q=80";
+            {post.titulo}
+          </h1>
+
+          {/* Resumen */}
+          <p 
+            style={{ 
+              fontSize: "1.1rem", 
+              lineHeight: "1.6", 
+              color: "#475569", 
+              fontStyle: "italic", 
+              margin: "0 0 35px 0",
+              borderLeft: "4px solid #3b82f6",
+              paddingLeft: "16px"
+            }}
+          >
+            {post.resumen}
+          </p>
+
+          {/* Imagen principal */}
+          {post.imagen && (
+            <div 
+              style={{ 
+                width: "100%", 
+                height: "clamp(200px, 40vh, 380px)", 
+                borderRadius: "12px", 
+                overflow: "hidden", 
+                marginBottom: "40px",
+                boxShadow: "0 10px 30px rgba(15, 23, 42, 0.04)"
               }}
-            />
-          </div>
-        )}
-
-        {/* Contenido HTML del Blog */}
-        <div 
-          className="blog-post-content"
-          dangerouslySetInnerHTML={{ __html: post.contenido }}
-          style={{
-            fontSize: "1.05rem",
-            lineHeight: "1.8",
-            color: "#334155",
-            textAlign: "justify"
-          }}
-        />
-
-        {/* Etiquetas / Keywords */}
-        {post.keywords && (
-          <div style={{ marginTop: "50px", borderTop: "1px solid #e2e8f0", paddingTop: "24px" }}>
-            <span style={{ fontSize: "0.85rem", color: "#64748b", fontWeight: "bold", textTransform: "uppercase", marginRight: "10px" }}>
-              Palabras Clave:
-            </span>
-            <div style={{ display: "inline-flex", flexWrap: "wrap", gap: "8px", marginTop: "8px" }}>
-              {post.keywords.split(",").map((kw, idx) => (
-                <span 
-                  key={idx} 
-                  style={{ 
-                    backgroundColor: "#f1f5f9", 
-                    color: "#475569", 
-                    fontSize: "0.8rem", 
-                    padding: "4px 12px", 
-                    borderRadius: "20px", 
-                    fontWeight: "500" 
-                  }}
-                >
-                  #{kw.trim()}
-                </span>
-              ))}
+            >
+              <img 
+                src={post.imagen} 
+                alt={post.titulo} 
+                style={{ width: "100%", height: "100%", objectFit: "cover" }} 
+                onError={(e: any) => {
+                  e.target.src = "https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=1200&q=80";
+                }}
+              />
             </div>
-          </div>
-        )}
+          )}
 
-      </article>
+          {/* Contenido HTML del Blog */}
+          <div 
+            className="blog-post-content"
+            dangerouslySetInnerHTML={{ __html: post.contenido }}
+            style={{
+              fontSize: "1.025rem",
+              lineHeight: "1.8",
+              color: "#334155",
+              textAlign: "justify"
+            }}
+          />
 
-      {/* BANNER CTA DE DISEÑO PREMIUM */}
-      <section style={{ backgroundColor: "#0f172a", color: "white", padding: "60px 5%" }}>
-        <div style={{ maxWidth: "900px", margin: "0 auto", display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: "40px", alignItems: "center" }}>
-          <div>
-            <h2 style={{ fontSize: "1.8rem", fontWeight: "800", color: "#ffffff", marginBottom: "12px" }}>
-              Fabricación Local a Medida para tu Negocio
-            </h2>
-            <p style={{ color: "#94a3b8", fontSize: "0.95rem", lineHeight: "1.6", margin: 0 }}>
-              ¿Necesitas mesones, campanas, lavamanos o algún mueble de acero inoxidable adaptado exactamente a tus planos y espacio? En Lezcom SpA desarrollamos proyectos comerciales e industriales con materiales certificados y los plazos de entrega más cortos del mercado chileno.
+          {/* Etiquetas / Keywords */}
+          {post.keywords && (
+            <div style={{ marginTop: "50px", borderTop: "1px solid #e2e8f0", paddingTop: "24px" }}>
+              <span style={{ fontSize: "0.85rem", color: "#64748b", fontWeight: "bold", textTransform: "uppercase", marginRight: "10px" }}>
+                Palabras Clave:
+              </span>
+              <div style={{ display: "inline-flex", flexWrap: "wrap", gap: "8px", marginTop: "8px" }}>
+                {post.keywords.split(",").map((kw, idx) => (
+                  <span 
+                    key={idx} 
+                    style={{ 
+                      backgroundColor: "#f1f5f9", 
+                      color: "#475569", 
+                      fontSize: "0.8rem", 
+                      padding: "4px 12px", 
+                      borderRadius: "20px", 
+                      fontWeight: "500" 
+                    }}
+                  >
+                    #{kw.trim()}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </article>
+
+        {/* COLUMNA DERECHA: SIDEBAR DE BLOG (30%) */}
+        <aside className="blog-sidebar" style={{ flex: "1 1 0%", display: "flex", flexDirection: "column", gap: "30px", minWidth: "280px" }}>
+          
+          {/* Tarjeta: Entradas Anteriores (Miniaturas) */}
+          {recentPosts.length > 0 && (
+            <div style={{ backgroundColor: "#ffffff", padding: "24px", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 4px 15px rgba(15, 23, 42, 0.02)" }}>
+              <h3 style={{ fontSize: "1rem", fontWeight: "800", color: "#0f172a", margin: "0 0 16px 0", borderBottom: "2px solid #3b82f6", paddingBottom: "8px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                📰 Otras Publicaciones
+              </h3>
+              
+              <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                {recentPosts.map((rPost) => (
+                  <div key={rPost.id} style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                    {/* Miniatura Circular */}
+                    <div style={{ width: "60px", height: "60px", borderRadius: "8px", overflow: "hidden", flexShrink: 0, backgroundColor: "#e2e8f0" }}>
+                      <img 
+                        src={rPost.imagen} 
+                        alt={rPost.titulo} 
+                        style={{ width: "100%", height: "100%", objectFit: "cover" }} 
+                        onError={(e: any) => {
+                          e.target.src = "https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=150&q=80";
+                        }}
+                      />
+                    </div>
+                    {/* Detalles */}
+                    <div style={{ minWidth: "0px" }}>
+                      <h4 style={{ fontSize: "0.85rem", fontWeight: "700", margin: "0 0 4px 0", lineHeight: "1.3", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                        <Link href={`/blog/${rPost.slug}`} style={{ textDecoration: "none", color: "#0f172a", transition: "color 0.2s" }} onMouseEnter={(e) => e.currentTarget.style.color = "#3b82f6"} onMouseLeave={(e) => e.currentTarget.style.color = "#0f172a"}>
+                          {rPost.titulo}
+                        </Link>
+                      </h4>
+                      <span style={{ fontSize: "0.75rem", color: "#64748b" }}>⏱️ {rPost.leido}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tarjeta: CTA Fabricante Local */}
+          <div style={{ backgroundColor: "#0f172a", backgroundImage: "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)", color: "white", padding: "24px", borderRadius: "12px", boxShadow: "0 10px 25px rgba(15,23,42,0.08)" }}>
+            <span style={{ color: "#3b82f6", fontSize: "0.75rem", fontWeight: "bold", textTransform: "uppercase", letterSpacing: "1px", display: "block", marginBottom: "8px" }}>¿Tienes un Proyecto?</span>
+            <h3 style={{ fontSize: "1.2rem", fontWeight: "800", color: "#ffffff", margin: "0 0 10px 0", lineHeight: "1.3" }}>
+              Fabricación Local a Medida
+            </h3>
+            <p style={{ color: "#94a3b8", fontSize: "0.825rem", lineHeight: "1.5", margin: "0 0 20px 0" }}>
+              En Lezcom SpA diseñamos y fabricamos muebles comerciales y técnicos de acero inoxidable grado quirúrgico con entrega garantizada.
             </p>
-          </div>
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <Link 
               href="/contacto"
               style={{
                 backgroundColor: "#3b82f6",
                 color: "#ffffff",
-                padding: "14px 28px",
-                borderRadius: "8px",
-                fontSize: "1rem",
+                padding: "10px 20px",
+                borderRadius: "6px",
+                fontSize: "0.85rem",
                 fontWeight: "bold",
                 textDecoration: "none",
                 display: "inline-block",
-                boxShadow: "0 4px 15px rgba(59,130,246,0.4)",
+                textAlign: "center",
+                width: "100%",
+                boxShadow: "0 4px 12px rgba(59,130,246,0.3)",
                 transition: "transform 0.2s"
               }}
-              onMouseEnter={(e) => e.currentTarget.style.transform = "scale(1.03)"}
+              onMouseEnter={(e) => e.currentTarget.style.transform = "scale(1.02)"}
               onMouseLeave={(e) => e.currentTarget.style.transform = "scale(1)"}
             >
-              📞 Solicitar Cotización
+              📞 Solicitar Presupuesto
             </Link>
           </div>
-        </div>
-      </section>
+
+        </aside>
+
+      </div>
 
       {/* ARTÍCULOS SUGERIDOS */}
       {recentPosts.length > 0 && (
@@ -309,6 +351,15 @@ export default function BlogPostDetail() {
 
       {/* Estilos CSS embebidos para dar formato rico al HTML generado */}
       <style jsx global>{`
+        @media (max-width: 991px) {
+          .blog-flex-container {
+            flex-direction: column !important;
+          }
+          .blog-sidebar {
+            width: 100% !important;
+            margin-top: 40px !important;
+          }
+        }
         .blog-post-content h2 {
           font-size: 1.6rem;
           color: #0f172a;
