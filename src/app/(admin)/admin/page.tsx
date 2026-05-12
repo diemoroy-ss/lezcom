@@ -126,6 +126,12 @@ export default function AdminPage() {
   const [blogFormLeido, setBlogFormLeido] = useState("");
   const [blogFormPublicado, setBlogFormPublicado] = useState(false);
 
+  // Sugerencias e Ideas de Blog IA
+  const [isGeneratingIdeas, setIsGeneratingIdeas] = useState(false);
+  const [isGeneratingCalendar, setIsGeneratingCalendar] = useState(false);
+  const [suggestedIdeas, setSuggestedIdeas] = useState<{ tema: string; keywords: string; explicacion: string }[]>([]);
+  const [suggestedCalendar, setSuggestedCalendar] = useState<{ semana: string; titulo: string; keywords: string; descripcion: string; secciones: string[] }[]>([]);
+
 
   // Configuración del Sistema
   const [brevoApiKey, setBrevoApiKey] = useState("");
@@ -1417,6 +1423,56 @@ export default function AdminPage() {
   // ==============================================
   // MÉTODOS DEL BLOG IA
   // ==============================================
+  const handleGetIdeas = async () => {
+    setIsGeneratingIdeas(true);
+    try {
+      const response = await fetch("/api/admin/suggest-blog-ideas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "ideas" })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Error al sugerir ideas.");
+      setSuggestedIdeas(data.ideas || []);
+      showNotificationModal("Sugerencias Generadas", "La IA ha analizado el mercado y propuesto 5 temas de alta relevancia para Lezcom SpA.", "success");
+    } catch (err: any) {
+      console.error(err);
+      showNotificationModal("Error", err.message || "No se pudieron obtener sugerencias.", "error");
+    } finally {
+      setIsGeneratingIdeas(false);
+    }
+  };
+
+  const handleGetCalendar = async () => {
+    setIsGeneratingCalendar(true);
+    try {
+      const response = await fetch("/api/admin/suggest-blog-ideas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "calendar" })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Error al crear calendario.");
+      setSuggestedCalendar(data.calendario || []);
+      showNotificationModal("Calendario Creado", "Se ha generado una planificación editorial estratégica de 4 semanas para diferentes nichos comerciales.", "success");
+    } catch (err: any) {
+      console.error(err);
+      showNotificationModal("Error", err.message || "No se pudo generar el calendario.", "error");
+    } finally {
+      setIsGeneratingCalendar(false);
+    }
+  };
+
+  const handleApplyIdea = (tema: string, keywords: string) => {
+    setNewBlogTopic(tema);
+    setNewBlogKeywords(keywords);
+    // Efecto de scroll hacia el formulario de generación
+    const genForm = document.getElementById("blog-generation-form");
+    if (genForm) {
+      genForm.scrollIntoView({ behavior: "smooth" });
+    }
+  };
+
   const handleGenerateBlog = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBlogTopic.trim()) return;
@@ -2233,7 +2289,7 @@ export default function AdminPage() {
                 Introduce un tema de interés para tus clientes potenciales (ej: "mantenimiento de mesones de acero" o "por qué preferir acero AISI 304"). Nuestra IA (Gemini 2.0 Flash) investigará y redactará un artículo completo optimizado para posicionamiento SEO con jerarquía HTML semántica, subtítulos, meta etiquetas y llamados a la acción automáticos hacia Lezcom.
               </p>
 
-              <form onSubmit={handleGenerateBlog} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 180px", gap: "16px", alignItems: "end" }}>
+              <form id="blog-generation-form" onSubmit={handleGenerateBlog} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 180px", gap: "16px", alignItems: "end" }}>
                 <div className="admin-form-group" style={{ margin: 0 }}>
                   <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600", marginBottom: "6px", display: "block" }}>
                     📝 Tema o Palabra Clave Semilla:
@@ -2306,6 +2362,119 @@ export default function AdminPage() {
                   </button>
                 </div>
               </form>
+            </div>
+
+            {/* HERRAMIENTAS DE PLANIFICACIÓN E IDEAS IA */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr", gap: "24px" }}>
+              {/* SUGERENCIAS DE TEMAS IA */}
+              <div className="glass-card" style={{ padding: "20px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                  <h4 style={{ margin: 0, fontSize: "1rem", fontWeight: "700" }}>💡 Temas y Palabras Clave Recomendados</h4>
+                  <button 
+                    type="button" 
+                    className="btn-admin btn-admin-primary" 
+                    onClick={handleGetIdeas}
+                    disabled={isGeneratingIdeas}
+                    style={{ padding: "6px 12px", fontSize: "0.8rem" }}
+                  >
+                    {isGeneratingIdeas ? "Buscando..." : "Sugerir con IA"}
+                  </button>
+                </div>
+                
+                {suggestedIdeas.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "30px 10px", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+                    Presiona "Sugerir con IA" para obtener 5 ideas de alta relevancia comercial y SEO para Lezcom.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                    {suggestedIdeas.map((idea, i) => (
+                      <div 
+                        key={i} 
+                        style={{ 
+                          padding: "12px", 
+                          backgroundColor: "rgba(255,255,255,0.03)", 
+                          border: "1px solid rgba(255,255,255,0.06)", 
+                          borderRadius: "8px",
+                          cursor: "pointer",
+                          transition: "background-color 0.2s"
+                        }}
+                        onClick={() => handleApplyIdea(idea.tema, idea.keywords)}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.07)"}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.03)"}
+                        title="Haz clic para aplicar este tema al formulario de arriba"
+                      >
+                        <div style={{ fontSize: "0.85rem", fontWeight: "700", color: "#60a5fa", marginBottom: "4px" }}>
+                          📌 {idea.tema}
+                        </div>
+                        <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                          {idea.explicacion}
+                        </div>
+                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+                          🎯 Keywords: {idea.keywords}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* CALENDARIO EDITORIAL IA */}
+              <div className="glass-card" style={{ padding: "20px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                  <h4 style={{ margin: 0, fontSize: "1rem", fontWeight: "700" }}>📅 Calendario Editorial de Contenidos</h4>
+                  <button 
+                    type="button" 
+                    className="btn-admin btn-admin-success" 
+                    onClick={handleGetCalendar}
+                    disabled={isGeneratingCalendar}
+                    style={{ padding: "6px 12px", fontSize: "0.8rem" }}
+                  >
+                    {isGeneratingCalendar ? "Creando..." : "Generar Plan de 4 Semanas"}
+                  </button>
+                </div>
+
+                {suggestedCalendar.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "30px 10px", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+                    Haz clic en "Generar Plan" para que la IA diseñe una campaña estructurada para cada semana de publicaciones.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: "380px", overflowY: "auto", paddingRight: "4px" }}>
+                    {suggestedCalendar.map((item, i) => (
+                      <div 
+                        key={i} 
+                        style={{ 
+                          padding: "12px", 
+                          backgroundColor: "rgba(16, 185, 129, 0.03)", 
+                          border: "1px solid rgba(16, 185, 129, 0.1)", 
+                          borderRadius: "8px",
+                          cursor: "pointer",
+                          transition: "background-color 0.2s"
+                        }}
+                        onClick={() => handleApplyIdea(item.titulo, item.keywords)}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "rgba(16, 185, 129, 0.07)"}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "rgba(16, 185, 129, 0.03)"}
+                        title="Haz clic para redactar esta semana de contenido"
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                          <span style={{ fontSize: "0.75rem", backgroundColor: "rgba(16, 185, 129, 0.2)", color: "#34d399", padding: "2px 6px", borderRadius: "10px", fontWeight: "bold" }}>
+                            {item.semana}
+                          </span>
+                          <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Clic para programar ➔</span>
+                        </div>
+                        <div style={{ fontSize: "0.85rem", fontWeight: "700", color: "#ffffff", marginBottom: "4px" }}>
+                          {item.titulo}
+                        </div>
+                        <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                          {item.descripcion}
+                        </div>
+                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                          <strong>Estructura recomendada:</strong> {item.secciones ? item.secciones.join(" • ") : ""}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* LISTADO DE ARTÍCULOS */}
