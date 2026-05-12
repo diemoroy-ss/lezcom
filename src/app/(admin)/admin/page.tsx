@@ -1484,7 +1484,7 @@ export default function AdminPage() {
               <div 
                 className="glass-card stat-card green"
                 style={{ cursor: "pointer", transition: "transform 0.15s ease, box-shadow 0.15s ease" }}
-                onClick={() => setShowLogsModal({ show: true, filter: "exito" })}
+                onClick={() => setShowLogsModal(prev => prev?.filter === "exito" ? null : { show: true, filter: "exito" })}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.transform = "translateY(-2px)"; (e.currentTarget as HTMLElement).style.boxShadow = "0 8px 25px rgba(16,185,129,0.25)"; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.transform = "translateY(0)"; (e.currentTarget as HTMLElement).style.boxShadow = ""; }}
                 title="Haz clic para ver el detalle de envíos exitosos"
@@ -1496,13 +1496,13 @@ export default function AdminPage() {
                 <div className="stat-number">
                   {historicalLogs.filter(l => l.status === "exito").length}
                 </div>
-                <div className="stat-desc">Total histórico de correos entregados. <span style={{ textDecoration: "underline", fontSize: "0.7rem" }}>Ver detalle →</span></div>
+                <div className="stat-desc">Total histórico de correos entregados. <span style={{ textDecoration: "underline", fontSize: "0.7rem" }}>{showLogsModal?.filter === "exito" ? "Ocultar ↑" : "Ver detalle →"}</span></div>
               </div>
 
               <div 
                 className="glass-card stat-card red"
                 style={{ cursor: "pointer", transition: "transform 0.15s ease, box-shadow 0.15s ease" }}
-                onClick={() => setShowLogsModal({ show: true, filter: "error" })}
+                onClick={() => setShowLogsModal(prev => prev?.filter === "error" ? null : { show: true, filter: "error" })}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.transform = "translateY(-2px)"; (e.currentTarget as HTMLElement).style.boxShadow = "0 8px 25px rgba(239,68,68,0.25)"; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.transform = "translateY(0)"; (e.currentTarget as HTMLElement).style.boxShadow = ""; }}
                 title="Haz clic para ver el detalle de envíos fallidos"
@@ -1514,9 +1514,135 @@ export default function AdminPage() {
                 <div className="stat-number">
                   {historicalLogs.filter(l => l.status === "error").length}
                 </div>
-                <div className="stat-desc">Total histórico de errores de envío. <span style={{ textDecoration: "underline", fontSize: "0.7rem" }}>Ver detalle →</span></div>
+                <div className="stat-desc">Total histórico de errores de envío. <span style={{ textDecoration: "underline", fontSize: "0.7rem" }}>{showLogsModal?.filter === "error" ? "Ocultar ↑" : "Ver detalle →"}</span></div>
               </div>
             </div>
+
+            {/* SECCIÓN INLINE: DETALLE DE LOGS HISTÓRICOS */}
+            {showLogsModal && showLogsModal.show && (
+              <div className="glass-card" style={{ marginTop: "20px", animation: "fadeIn 0.25s ease" }}>
+                {/* Header */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                  <div>
+                    <h3 style={{ fontSize: "1.15rem", fontWeight: "800", color: "#ffffff", margin: "0 0 4px" }}>
+                      {showLogsModal.filter === "exito" ? "✔️ Historial de Envíos Exitosos" : showLogsModal.filter === "error" ? "❌ Historial de Envíos Fallidos" : "📋 Historial Completo de Envíos"}
+                    </h3>
+                    <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", margin: 0 }}>
+                      Registros persistentes ordenados del más reciente al más antiguo
+                    </p>
+                  </div>
+                  <button 
+                    className="btn-admin"
+                    onClick={() => setShowLogsModal(null)}
+                    style={{ padding: "6px 14px", fontSize: "0.8rem" }}
+                  >
+                    ✕ Cerrar
+                  </button>
+                </div>
+
+                {/* Filtros */}
+                <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
+                  <button 
+                    className={`btn-admin ${showLogsModal.filter === "all" ? "btn-admin-primary" : ""}`}
+                    style={{ padding: "6px 14px", fontSize: "0.8rem" }}
+                    onClick={() => setShowLogsModal({ show: true, filter: "all" })}
+                  >
+                    📋 Todos ({historicalLogs.length})
+                  </button>
+                  <button 
+                    className={`btn-admin ${showLogsModal.filter === "exito" ? "btn-admin-success" : ""}`}
+                    style={{ padding: "6px 14px", fontSize: "0.8rem" }}
+                    onClick={() => setShowLogsModal({ show: true, filter: "exito" })}
+                  >
+                    ✔️ Exitosos ({historicalLogs.filter(l => l.status === "exito").length})
+                  </button>
+                  <button 
+                    className={`btn-admin ${showLogsModal.filter === "error" ? "btn-admin-danger" : ""}`}
+                    style={{ padding: "6px 14px", fontSize: "0.8rem" }}
+                    onClick={() => setShowLogsModal({ show: true, filter: "error" })}
+                  >
+                    ❌ Fallidos ({historicalLogs.filter(l => l.status === "error").length})
+                  </button>
+                </div>
+
+                {/* Tabla de logs */}
+                <div style={{ maxHeight: "450px", overflowY: "auto" }}>
+                  {(() => {
+                    const filtered = showLogsModal.filter === "all" 
+                      ? historicalLogs 
+                      : historicalLogs.filter(l => l.status === showLogsModal.filter);
+                    
+                    if (filtered.length === 0) {
+                      return (
+                        <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--text-secondary)" }}>
+                          📭 No hay registros {showLogsModal.filter === "exito" ? "exitosos" : showLogsModal.filter === "error" ? "fallidos" : ""} en el historial.
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="table-container">
+                        <table className="admin-table">
+                          <thead>
+                            <tr>
+                              <th style={{ width: "50px" }}>#</th>
+                              <th style={{ width: "160px" }}>Fecha y Hora</th>
+                              <th>Empresa</th>
+                              <th>Correo</th>
+                              <th>Rubro/Plantilla</th>
+                              <th style={{ width: "80px" }}>Estado</th>
+                              <th>Detalle</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filtered.map((log, idx) => {
+                              let fechaStr = "N/A";
+                              try {
+                                const d = log.fecha?.seconds ? new Date(log.fecha.seconds * 1000) : (log.fecha instanceof Date ? log.fecha : new Date(log.fecha));
+                                fechaStr = d.toLocaleString("es-CL", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+                              } catch { fechaStr = "Fecha inválida"; }
+
+                              return (
+                                <tr key={log.id || idx}>
+                                  <td style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>{idx + 1}</td>
+                                  <td style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>{fechaStr}</td>
+                                  <td>
+                                    <strong style={{ fontSize: "0.85rem" }}>{log.razonSocial || "S/R"}</strong>
+                                  </td>
+                                  <td style={{ fontSize: "0.8rem", wordBreak: "break-all" }}>{log.emailCliente}</td>
+                                  <td style={{ fontSize: "0.8rem" }}>{log.areaTemplate || "N/A"}</td>
+                                  <td>
+                                    <span style={{
+                                      display: "inline-block",
+                                      padding: "3px 8px",
+                                      borderRadius: "6px",
+                                      fontSize: "0.7rem",
+                                      fontWeight: "700",
+                                      textTransform: "uppercase",
+                                      backgroundColor: log.status === "exito" ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)",
+                                      color: log.status === "exito" ? "#10b981" : "#ef4444",
+                                      border: `1px solid ${log.status === "exito" ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.2)"}`
+                                    }}>
+                                      {log.status === "exito" ? "✔ Éxito" : "✘ Error"}
+                                    </span>
+                                  </td>
+                                  <td style={{ fontSize: "0.75rem", color: log.status === "exito" ? "#a7f3d0" : "#fca5a5", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {log.status === "exito" 
+                                      ? (log.mensajeId ? `ID: ${log.mensajeId}` : "Enviado OK") 
+                                      : (log.error || "Error desconocido")
+                                    }
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -3022,149 +3148,6 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* ==============================================
-          MODAL: DETALLE DE LOGS HISTÓRICOS (ENVIADOS / FALLIDOS)
-          ============================================== */}
-      {showLogsModal && showLogsModal.show && (
-        <div className="modal-overlay" style={{ zIndex: 1250, padding: "20px" }}>
-          <div className="modal-content" style={{ 
-            maxWidth: "850px", 
-            width: "95%",
-            maxHeight: "90vh",
-            display: "flex",
-            flexDirection: "column",
-            border: `1px solid ${showLogsModal.filter === "exito" ? "rgba(16,185,129,0.3)" : showLogsModal.filter === "error" ? "rgba(239,68,68,0.3)" : "rgba(255,255,255,0.1)"}`,
-            padding: "24px"
-          }}>
-            {/* Header */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexShrink: 0 }}>
-              <div>
-                <h2 style={{ fontSize: "1.3rem", fontWeight: "800", color: "#ffffff", margin: "0 0 4px" }}>
-                  {showLogsModal.filter === "exito" ? "✔️ Historial de Envíos Exitosos" : showLogsModal.filter === "error" ? "❌ Historial de Envíos Fallidos" : "📋 Historial Completo de Envíos"}
-                </h2>
-                <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", margin: 0 }}>
-                  Registros persistentes ordenados del más reciente al más antiguo
-                </p>
-              </div>
-              <button 
-                onClick={() => setShowLogsModal(null)}
-                style={{ background: "transparent", border: "none", color: "var(--text-secondary)", fontSize: "1.5rem", cursor: "pointer", lineHeight: 1 }}
-              >
-                ×
-              </button>
-            </div>
-
-            {/* Filtros */}
-            <div style={{ display: "flex", gap: "8px", marginBottom: "16px", flexShrink: 0 }}>
-              <button 
-                className={`btn-admin ${showLogsModal.filter === "all" ? "btn-admin-primary" : ""}`}
-                style={{ padding: "6px 14px", fontSize: "0.8rem" }}
-                onClick={() => setShowLogsModal({ show: true, filter: "all" })}
-              >
-                📋 Todos ({historicalLogs.length})
-              </button>
-              <button 
-                className={`btn-admin ${showLogsModal.filter === "exito" ? "btn-admin-success" : ""}`}
-                style={{ padding: "6px 14px", fontSize: "0.8rem" }}
-                onClick={() => setShowLogsModal({ show: true, filter: "exito" })}
-              >
-                ✔️ Exitosos ({historicalLogs.filter(l => l.status === "exito").length})
-              </button>
-              <button 
-                className={`btn-admin ${showLogsModal.filter === "error" ? "btn-admin-danger" : ""}`}
-                style={{ padding: "6px 14px", fontSize: "0.8rem" }}
-                onClick={() => setShowLogsModal({ show: true, filter: "error" })}
-              >
-                ❌ Fallidos ({historicalLogs.filter(l => l.status === "error").length})
-              </button>
-            </div>
-
-            {/* Tabla de logs */}
-            <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-              {(() => {
-                const filtered = showLogsModal.filter === "all" 
-                  ? historicalLogs 
-                  : historicalLogs.filter(l => l.status === showLogsModal.filter);
-                
-                if (filtered.length === 0) {
-                  return (
-                    <div style={{ padding: "60px 20px", textAlign: "center", color: "var(--text-secondary)" }}>
-                      📭 No hay registros {showLogsModal.filter === "exito" ? "exitosos" : showLogsModal.filter === "error" ? "fallidos" : ""} en el historial.
-                    </div>
-                  );
-                }
-
-                return (
-                  <div className="table-container">
-                    <table className="admin-table">
-                      <thead>
-                        <tr>
-                          <th style={{ width: "50px" }}>#</th>
-                          <th style={{ width: "160px" }}>Fecha y Hora</th>
-                          <th>Empresa</th>
-                          <th>Correo</th>
-                          <th>Rubro/Plantilla</th>
-                          <th style={{ width: "80px" }}>Estado</th>
-                          <th>Detalle</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filtered.map((log, idx) => {
-                          let fechaStr = "N/A";
-                          try {
-                            const d = log.fecha?.seconds ? new Date(log.fecha.seconds * 1000) : (log.fecha instanceof Date ? log.fecha : new Date(log.fecha));
-                            fechaStr = d.toLocaleString("es-CL", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
-                          } catch { fechaStr = "Fecha inválida"; }
-
-                          return (
-                            <tr key={log.id || idx}>
-                              <td style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>{idx + 1}</td>
-                              <td style={{ fontSize: "0.8rem", whiteSpace: "nowrap" }}>{fechaStr}</td>
-                              <td>
-                                <strong style={{ fontSize: "0.85rem" }}>{log.razonSocial || "S/R"}</strong>
-                              </td>
-                              <td style={{ fontSize: "0.8rem", wordBreak: "break-all" }}>{log.emailCliente}</td>
-                              <td style={{ fontSize: "0.8rem" }}>{log.areaTemplate || "N/A"}</td>
-                              <td>
-                                <span style={{
-                                  display: "inline-block",
-                                  padding: "3px 8px",
-                                  borderRadius: "6px",
-                                  fontSize: "0.7rem",
-                                  fontWeight: "700",
-                                  textTransform: "uppercase",
-                                  backgroundColor: log.status === "exito" ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)",
-                                  color: log.status === "exito" ? "#10b981" : "#ef4444",
-                                  border: `1px solid ${log.status === "exito" ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.2)"}`
-                                }}>
-                                  {log.status === "exito" ? "✔ Éxito" : "✘ Error"}
-                                </span>
-                              </td>
-                              <td style={{ fontSize: "0.75rem", color: log.status === "exito" ? "#a7f3d0" : "#fca5a5", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {log.status === "exito" 
-                                  ? (log.mensajeId ? `ID: ${log.mensajeId}` : "Enviado OK") 
-                                  : (log.error || "Error desconocido")
-                                }
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* Footer */}
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "16px", flexShrink: 0 }}>
-              <button className="btn-admin" onClick={() => setShowLogsModal(null)}>
-                Cerrar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ==============================================
           MODAL: CREACIÓN MANUAL DE CLIENTES
