@@ -19,7 +19,17 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
-            # Navegar a la carpeta del proyecto (asegúrate de que existe)
+            # Cargar entorno de Node.js (nvm, npm, pm2)
+            export PATH=$PATH:/usr/local/bin:/usr/bin
+            source ~/.bashrc 2>/dev/null || true
+            source ~/.nvm/nvm.sh 2>/dev/null || true
+            source ~/.profile 2>/dev/null || true
+            
+            # Verificar que node y npm están disponibles
+            echo "Node: $(node -v 2>/dev/null || echo 'NO ENCONTRADO')"
+            echo "NPM: $(npm -v 2>/dev/null || echo 'NO ENCONTRADO')"
+            
+            # Navegar a la carpeta del proyecto
             cd /var/www/lezcom-landing || { echo "La carpeta /var/www/lezcom-landing no existe"; exit 1; }
             
             # Actualizar código
