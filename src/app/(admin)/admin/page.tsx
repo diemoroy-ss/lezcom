@@ -67,6 +67,20 @@ interface Template {
   ultimoSync?: any;
 }
 
+export interface BlogPost {
+  id: string;
+  titulo: string;
+  slug: string;
+  resumen: string;
+  contenido: string;
+  imagen: string;
+  keywords: string;
+  metaDescription: string;
+  fecha: any;
+  leido: string;
+  publicado: boolean;
+}
+
 interface ConsoleLog {
   text: string;
   type: "info" | "success" | "warn" | "error";
@@ -86,8 +100,31 @@ interface FirestoreLog {
 
 export default function AdminPage() {
   // Pestaña Activa
-  const [activeTab, setActiveTab] = useState<"dashboard" | "contacts" | "templates" | "settings">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "contacts" | "templates" | "settings" | "blogs">("dashboard");
   const [settingsSubTab, setSettingsSubTab] = useState<"credentials" | "sync">("credentials");
+
+  // Estados del Blog IA
+  const [blogs, setBlogs] = useState<BlogPost[]>([]);
+  const [isLoadingBlogs, setIsLoadingBlogs] = useState(false);
+  const [isGeneratingBlog, setIsGeneratingBlog] = useState(false);
+  const [showBlogEditorModal, setShowBlogEditorModal] = useState(false);
+  const [selectedBlog, setSelectedBlog] = useState<BlogPost | null>(null);
+
+  // Formulario de Generación de Blog
+  const [newBlogTopic, setNewBlogTopic] = useState("");
+  const [newBlogKeywords, setNewBlogKeywords] = useState("");
+  const [newBlogTone, setNewBlogTone] = useState<"Profesional" | "Informativo" | "Persuasivo" | "Técnico" | "Cercano">("Profesional");
+
+  // Editor de Blog
+  const [blogFormTitle, setBlogFormTitle] = useState("");
+  const [blogFormSlug, setBlogFormSlug] = useState("");
+  const [blogFormResumen, setBlogFormResumen] = useState("");
+  const [blogFormContent, setBlogFormContent] = useState("");
+  const [blogFormKeywords, setBlogFormKeywords] = useState("");
+  const [blogFormMetaDesc, setBlogFormMetaDesc] = useState("");
+  const [blogFormImage, setBlogFormImage] = useState("");
+  const [blogFormLeido, setBlogFormLeido] = useState("");
+  const [blogFormPublicado, setBlogFormPublicado] = useState(false);
 
 
   // Configuración del Sistema
@@ -282,6 +319,19 @@ export default function AdminPage() {
         setHistoricalLogs(logsList);
       } catch (logsErr) {
         console.warn("No se pudieron cargar logs históricos:", logsErr);
+      }
+
+      // Cargar blogs generados por IA
+      try {
+        const blogsQuery = query(collection(db, "blogs"), orderBy("fecha", "desc"));
+        const blogsSnap = await getDocs(blogsQuery);
+        const blogsList: BlogPost[] = [];
+        blogsSnap.forEach((doc) => {
+          blogsList.push({ id: doc.id, ...doc.data() } as BlogPost);
+        });
+        setBlogs(blogsList);
+      } catch (blogsErr) {
+        console.warn("No se pudieron cargar los blogs generados:", blogsErr);
       }
 
       // Inicializar seleccionados para previsualización
@@ -1364,6 +1414,148 @@ export default function AdminPage() {
     document.body.removeChild(link);
   };
 
+  // ==============================================
+  // MÉTODOS DEL BLOG IA
+  // ==============================================
+  const handleGenerateBlog = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newBlogTopic.trim()) return;
+
+    setIsGeneratingBlog(true);
+    try {
+      const response = await fetch("/api/admin/generate-blog", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: newBlogTopic,
+          keywords: newBlogKeywords,
+          tone: newBlogTone
+        })
+      });
+
+      const res = await response.json();
+      if (!response.ok) {
+        throw new Error(res.error || "No se pudo generar el artículo con IA.");
+      }
+
+      // Pre-llenar campos en el editor
+      setBlogFormTitle(res.titulo || "");
+      setBlogFormSlug(res.slug || "");
+      setBlogFormResumen(res.resumen || "");
+      setBlogFormContent(res.contenido || "");
+      setBlogFormKeywords(res.keywords || "");
+      setBlogFormMetaDesc(res.metaDescription || "");
+      setBlogFormLeido(res.leido || "5 min de lectura");
+      setBlogFormPublicado(false);
+
+      // Usar sugerencia de query de imagen para proponer una bonita foto de Unsplash
+      const imgKeyword = res.sugerenciaImagenQuery || "stainless-steel-commercial";
+      setBlogFormImage(`https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=1200&q=80`); // Imagen estándar industrial de Unsplash
+
+      setSelectedBlog(null); // Es un nuevo blog
+      setShowBlogEditorModal(true);
+      showNotificationModal("¡Artículo Generado!", "La IA ha creado una propuesta para tu blog. Puedes revisarla, editarla y guardarla ahora.", "success");
+    } catch (err: any) {
+      console.error(err);
+      showNotificationModal("Error al Generar", err.message || "Error al comunicarse con Gemini.", "error");
+    } finally {
+      setIsGeneratingBlog(false);
+    }
+  };
+
+  const handleSaveBlog = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const db = getDb();
+    if (!db) {
+      showNotificationModal("Error", "La base de datos de Firebase no está activa.", "error");
+      return;
+    }
+
+    try {
+      const blogData = {
+        titulo: blogFormTitle,
+        slug: blogFormSlug.toLowerCase().trim().replace(/\s+/g, '-'),
+        resumen: blogFormResumen,
+        contenido: blogFormContent,
+        keywords: blogFormKeywords,
+        metaDescription: blogFormMetaDesc,
+        imagen: blogFormImage || "https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=1200&q=80",
+        leido: blogFormLeido || "5 min de lectura",
+        publicado: blogFormPublicado,
+        fecha: selectedBlog?.fecha || new Date()
+      };
+
+      if (selectedBlog?.id) {
+        // Actualizar existente
+        const docRef = doc(db, "blogs", selectedBlog.id);
+        await updateDoc(docRef, blogData);
+        setBlogs(prev => prev.map(b => b.id === selectedBlog.id ? { ...b, ...blogData } : b));
+        showNotificationModal("Blog Actualizado", "El artículo se guardó correctamente.", "success");
+      } else {
+        // Crear nuevo
+        const docRef = await addDoc(collection(db, "blogs"), blogData);
+        setBlogs(prev => [{ id: docRef.id, ...blogData } as BlogPost, ...prev]);
+        showNotificationModal("Blog Creado", "El artículo se ha guardado de forma exitosa.", "success");
+      }
+
+      setShowBlogEditorModal(false);
+      // Limpiar campos de generación rápida
+      setNewBlogTopic("");
+      setNewBlogKeywords("");
+    } catch (err: any) {
+      console.error(err);
+      showNotificationModal("Error al Guardar", err.message || "Ocurrió un error al guardar el artículo.", "error");
+    }
+  };
+
+  const handleEditBlog = (blog: BlogPost) => {
+    setSelectedBlog(blog);
+    setBlogFormTitle(blog.titulo || "");
+    setBlogFormSlug(blog.slug || "");
+    setBlogFormResumen(blog.resumen || "");
+    setBlogFormContent(blog.contenido || "");
+    setBlogFormKeywords(blog.keywords || "");
+    setBlogFormMetaDesc(blog.metaDescription || "");
+    setBlogFormImage(blog.imagen || "");
+    setBlogFormLeido(blog.leido || "5 min de lectura");
+    setBlogFormPublicado(blog.publicado || false);
+    setShowBlogEditorModal(true);
+  };
+
+  const handleDeleteBlog = async (blogId: string) => {
+    if (!confirm("¿Estás seguro de que deseas eliminar este artículo permanentemente?")) return;
+    const db = getDb();
+    if (!db) return;
+
+    try {
+      await deleteDoc(doc(db, "blogs", blogId));
+      setBlogs(prev => prev.filter(b => b.id !== blogId));
+      showNotificationModal("Blog Eliminado", "El artículo ha sido eliminado con éxito.", "success");
+    } catch (err: any) {
+      console.error(err);
+      showNotificationModal("Error", "No se pudo eliminar el artículo.", "error");
+    }
+  };
+
+  const handleTogglePublish = async (blog: BlogPost) => {
+    const db = getDb();
+    if (!db) return;
+
+    try {
+      const nextState = !blog.publicado;
+      await updateDoc(doc(db, "blogs", blog.id), { publicado: nextState });
+      setBlogs(prev => prev.map(b => b.id === blog.id ? { ...b, publicado: nextState } : b));
+      showNotificationModal(
+        nextState ? "Artículo Publicado" : "Borrador Guardado",
+        nextState ? "El artículo ahora es visible en el sitio web." : "El artículo se ha despublicado y guardado como borrador.",
+        "success"
+      );
+    } catch (err: any) {
+      console.error(err);
+      showNotificationModal("Error", "No se pudo cambiar el estado de publicación.", "error");
+    }
+  };
+
   // Template activo para visor
   const activeTemplateObj = templates.find(t => t.Rubro === selectedPreviewTemplate);
   const activeContactObj = contacts.find(c => c.id === selectedPreviewContact);
@@ -1409,6 +1601,12 @@ export default function AdminPage() {
             📄 Plantillas ({templates.length})
           </button>
           <button 
+            className={`nav-item ${activeTab === "blogs" ? "active" : ""}`}
+            onClick={() => setActiveTab("blogs")}
+          >
+            ✍️ Blog IA ({blogs.length})
+          </button>
+          <button 
             className={`nav-item ${activeTab === "settings" ? "active" : ""}`}
             onClick={() => setActiveTab("settings")}
           >
@@ -1431,12 +1629,14 @@ export default function AdminPage() {
               {activeTab === "dashboard" && "Cuadro de Mando"}
               {activeTab === "contacts" && "Base de Clientes"}
               {activeTab === "templates" && "Plantillas de Correo"}
+              {activeTab === "blogs" && "Artículos del Blog IA"}
               {activeTab === "settings" && "Configuración General"}
             </h1>
             <p>
               {activeTab === "dashboard" && "Métricas globales y consola de control rápido."}
               {activeTab === "contacts" && "Gestión de destinatarios e histórico de entregas."}
               {activeTab === "templates" && "Previsualización y emparejamiento por Rubro."}
+              {activeTab === "blogs" && "Genera automáticamente artículos de alta calidad optimizados para SEO usando Inteligencia Artificial."}
               {activeTab === "settings" && "Gestionar API de Brevo, webhooks y conexión a Firebase."}
             </p>
           </div>
@@ -2010,6 +2210,239 @@ export default function AdminPage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+        {/* ============================================== */}
+
+        {/* ==============================================
+            VISTA: BLOGS (IA SEO BLOG GENERATOR)
+            ============================================== */}
+        {activeTab === "blogs" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            
+            {/* PANEL DE GENERACIÓN CON IA */}
+            <div className="glass-card" style={{ padding: "24px", position: "relative", overflow: "hidden" }}>
+              {/* Efecto de luz de fondo sutil */}
+              <div style={{ position: "absolute", top: "-50px", right: "-50px", width: "150px", height: "150px", borderRadius: "50%", background: "radial-gradient(circle, rgba(99,102,241,0.15) 0%, transparent 70%)", pointerEvents: "none" }}></div>
+              
+              <h3 style={{ display: "flex", alignItems: "center", gap: "10px", margin: "0 0 16px 0", fontSize: "1.2rem", fontWeight: "700" }}>
+                <span>✨ Redacción de Blogs con Inteligencia Artificial (SEO)</span>
+              </h3>
+              
+              <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", margin: "0 0 20px 0", lineHeight: "1.5" }}>
+                Introduce un tema de interés para tus clientes potenciales (ej: "mantenimiento de mesones de acero" o "por qué preferir acero AISI 304"). Nuestra IA (Gemini 2.0 Flash) investigará y redactará un artículo completo optimizado para posicionamiento SEO con jerarquía HTML semántica, subtítulos, meta etiquetas y llamados a la acción automáticos hacia Lezcom.
+              </p>
+
+              <form onSubmit={handleGenerateBlog} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 180px", gap: "16px", alignItems: "end" }}>
+                <div className="admin-form-group" style={{ margin: 0 }}>
+                  <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600", marginBottom: "6px", display: "block" }}>
+                    📝 Tema o Palabra Clave Semilla:
+                  </label>
+                  <input 
+                    type="text"
+                    className="input-admin-text"
+                    placeholder="Ej. Guía para diseñar una cocina industrial higiénica en Santiago..."
+                    value={newBlogTopic}
+                    onChange={(e) => setNewBlogTopic(e.target.value)}
+                    required
+                    disabled={isGeneratingBlog}
+                  />
+                </div>
+
+                <div className="admin-form-group" style={{ margin: 0 }}>
+                  <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600", marginBottom: "6px", display: "block" }}>
+                    🎯 Palabras Clave Adicionales (opcional, separadas por comas):
+                  </label>
+                  <input 
+                    type="text"
+                    className="input-admin-text"
+                    placeholder="Ej. cocinas industriales chile, acero inoxidable gastronomico, mesones..."
+                    value={newBlogKeywords}
+                    onChange={(e) => setNewBlogKeywords(e.target.value)}
+                    disabled={isGeneratingBlog}
+                  />
+                </div>
+
+                <div className="admin-form-group" style={{ margin: 0 }}>
+                  <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600", marginBottom: "6px", display: "block" }}>
+                    🗣️ Tono de Redacción:
+                  </label>
+                  <select
+                    className="select-admin"
+                    style={{ width: "100%", height: "42px", padding: "8px 12px" }}
+                    value={newBlogTone}
+                    onChange={(e: any) => setNewBlogTone(e.target.value)}
+                    disabled={isGeneratingBlog}
+                  >
+                    <option value="Profesional">👔 Profesional</option>
+                    <option value="Informativo">📚 Informativo</option>
+                    <option value="Persuasivo">🎯 Persuasivo</option>
+                    <option value="Técnico">🔧 Técnico</option>
+                    <option value="Cercano">🤝 Cercano</option>
+                  </select>
+                </div>
+
+                <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end", marginTop: "4px" }}>
+                  <button 
+                    type="submit" 
+                    className="btn-admin btn-admin-primary"
+                    disabled={isGeneratingBlog || !newBlogTopic.trim()}
+                    style={{ 
+                      padding: "12px 24px", 
+                      fontSize: "0.9rem", 
+                      background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+                      border: "none",
+                      boxShadow: "0 4px 12px rgba(99, 102, 241, 0.3)"
+                    }}
+                  >
+                    {isGeneratingBlog ? (
+                      <>
+                        <span style={{ display: "inline-block", width: "14px", height: "14px", border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.7s linear infinite", marginRight: "8px" }}></span>
+                        Redactando con IA... (Toma unos segundos)
+                      </>
+                    ) : (
+                      <>🪄 Generar Artículo con IA</>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* LISTADO DE ARTÍCULOS */}
+            <div className="glass-card" style={{ padding: "24px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "12px" }}>
+                <h3 style={{ fontSize: "1.1rem", margin: 0, fontWeight: "700" }}>Artículos del Blog ({blogs.length})</h3>
+                <button 
+                  className="btn-admin btn-admin-success"
+                  onClick={() => {
+                    setSelectedBlog(null);
+                    setBlogFormTitle("");
+                    setBlogFormSlug("");
+                    setBlogFormResumen("");
+                    setBlogFormContent("<p>Comienza a escribir tu artículo aquí...</p><h2>Subtítulo principal</h2><p>...</p>");
+                    setBlogFormKeywords("acero inoxidable, lezcom");
+                    setBlogFormMetaDesc("");
+                    setBlogFormImage("https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=1200&q=80");
+                    setBlogFormLeido("5 min de lectura");
+                    setBlogFormPublicado(false);
+                    setShowBlogEditorModal(true);
+                  }}
+                  style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.85rem" }}
+                >
+                  ➕ Crear Artículo Manual
+                </button>
+              </div>
+
+              {blogs.length === 0 ? (
+                <div style={{ padding: "60px 0", textAlign: "center", color: "var(--text-secondary)", display: "flex", flexDirection: "column", alignItems: "center", gap: "12px" }}>
+                  <span style={{ fontSize: "3rem" }}>✍️</span>
+                  <div style={{ fontWeight: "600", fontSize: "1rem" }}>No hay artículos en tu blog todavía</div>
+                  <p style={{ maxWidth: "450px", fontSize: "0.85rem", color: "var(--text-muted)", margin: 0, lineHeight: "1.5" }}>
+                    Usa el generador inteligente de arriba introduciendo un tema, o haz clic en "Crear Artículo Manual" para redactar tu propio contenido.
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "20px" }}>
+                  {blogs.map((blog) => (
+                    <div 
+                      key={blog.id} 
+                      className="glass-card" 
+                      style={{ 
+                        display: "flex", 
+                        flexDirection: "column", 
+                        overflow: "hidden", 
+                        border: "1px solid rgba(255,255,255,0.06)", 
+                        borderRadius: "12px",
+                        background: "rgba(30, 41, 59, 0.4)",
+                        transition: "transform 0.2s, box-shadow 0.2s",
+                        cursor: "default"
+                      }}
+                    >
+                      {/* Imagen de Cabecera del Post */}
+                      <div style={{ position: "relative", height: "160px", width: "100%", overflow: "hidden", backgroundColor: "#1e293b" }}>
+                        <img 
+                          src={blog.imagen} 
+                          alt={blog.titulo} 
+                          style={{ width: "100%", height: "100%", objectFit: "cover" }} 
+                          onError={(e: any) => {
+                            e.target.src = "https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=600&q=80";
+                          }}
+                        />
+                        <span style={{ 
+                          position: "absolute", 
+                          top: "12px", 
+                          right: "12px", 
+                          padding: "4px 10px", 
+                          borderRadius: "20px", 
+                          fontSize: "0.75rem", 
+                          fontWeight: "bold", 
+                          background: blog.publicado ? "rgba(16, 185, 129, 0.9)" : "rgba(100, 116, 139, 0.9)",
+                          color: "#ffffff"
+                        }}>
+                          {blog.publicado ? "🟢 Publicado" : "⚪ Borrador"}
+                        </span>
+                      </div>
+
+                      {/* Contenido de la Tarjeta */}
+                      <div style={{ padding: "18px", flex: 1, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+                        <div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "8px" }}>
+                            <span>{blog.fecha ? new Date(blog.fecha.seconds ? blog.fecha.seconds * 1000 : blog.fecha).toLocaleDateString("es-CL") : ""}</span>
+                            <span>⏱️ {blog.leido}</span>
+                          </div>
+                          
+                          <h4 style={{ fontSize: "1rem", fontWeight: "700", color: "#ffffff", marginBottom: "8px", lineHeight: "1.4", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                            {blog.titulo}
+                          </h4>
+                          
+                          <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", lineHeight: "1.5", marginBottom: "16px", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}>
+                            {blog.resumen}
+                          </p>
+                        </div>
+
+                        {/* Botones de acción */}
+                        <div style={{ display: "flex", gap: "8px", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "14px", marginTop: "10px" }}>
+                          <button 
+                            className="btn-admin" 
+                            style={{ flex: 1, padding: "6px 0", fontSize: "0.75rem", justifyContent: "center" }}
+                            onClick={() => handleEditBlog(blog)}
+                          >
+                            📝 Editar
+                          </button>
+                          
+                          <button 
+                            className="btn-admin" 
+                            style={{ 
+                              flex: 1.2, 
+                              padding: "6px 0", 
+                              fontSize: "0.75rem", 
+                              justifyContent: "center",
+                              backgroundColor: blog.publicado ? "rgba(239, 68, 68, 0.1)" : "rgba(16, 185, 129, 0.1)",
+                              color: blog.publicado ? "#f87171" : "#34d399",
+                              border: blog.publicado ? "1px solid rgba(239, 68, 68, 0.2)" : "1px solid rgba(16, 185, 129, 0.2)"
+                            }}
+                            onClick={() => handleTogglePublish(blog)}
+                          >
+                            {blog.publicado ? "💤 Desactivar" : "🌐 Publicar"}
+                          </button>
+
+                          <button 
+                            className="btn-admin btn-admin-danger" 
+                            style={{ padding: "6px 10px", fontSize: "0.75rem", display: "flex", justifyContent: "center", alignItems: "center" }}
+                            onClick={() => handleDeleteBlog(blog.id)}
+                            title="Eliminar"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </div>
+
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
           </div>
         )}
 
@@ -3290,6 +3723,222 @@ export default function AdminPage() {
                   💾 Guardar Cliente en Firestore
                 </button>
               </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ==============================================
+          MODAL: EDITOR DE ARTÍCULOS DE BLOG
+          ============================================== */}
+      {showBlogEditorModal && (
+        <div className="modal-overlay" style={{ zIndex: 1100, padding: "20px" }}>
+          <div className="modal-content" style={{ 
+            maxWidth: "1200px", 
+            width: "95%", 
+            maxHeight: "90vh", 
+            display: "flex", 
+            flexDirection: "column", 
+            padding: "24px",
+            border: "1px solid rgba(255,255,255,0.1)",
+            overflow: "hidden"
+          }}>
+            {/* Cabecera */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexShrink: 0 }}>
+              <h2 style={{ fontSize: "1.3rem", fontWeight: "800", color: "#ffffff", margin: 0 }}>
+                {selectedBlog ? "📝 Editar Artículo del Blog" : "✨ Revisar y Crear Artículo Generado"}
+              </h2>
+              <button 
+                className="modal-close" 
+                onClick={() => setShowBlogEditorModal(false)}
+                style={{ fontSize: "1.8rem", color: "var(--text-secondary)", background: "transparent", border: "none", cursor: "pointer" }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Contenido principal en dos columnas (Formulario a la izq, Previsualización a la der) */}
+            <form onSubmit={handleSaveBlog} style={{ display: "flex", flex: 1, gap: "24px", minHeight: 0 }}>
+              
+              {/* Columna Izquierda: Formulario de Edición */}
+              <div style={{ flex: 1.2, display: "flex", flexDirection: "column", gap: "12px", overflowY: "auto", paddingRight: "8px" }}>
+                
+                <div className="admin-form-group" style={{ margin: 0 }}>
+                  <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>Título del Artículo:</label>
+                  <input 
+                    type="text" 
+                    className="input-admin-text" 
+                    value={blogFormTitle}
+                    onChange={(e) => {
+                      setBlogFormTitle(e.target.value);
+                      if (!selectedBlog) {
+                        // Generar slug automático si es creación nueva
+                        setBlogFormSlug(e.target.value.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-'));
+                      }
+                    }}
+                    required
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                  <div className="admin-form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>Ruta / Slug URL:</label>
+                    <input 
+                      type="text" 
+                      className="input-admin-text" 
+                      value={blogFormSlug}
+                      onChange={(e) => setBlogFormSlug(e.target.value.toLowerCase().trim().replace(/\s+/g, '-'))}
+                      required
+                      placeholder="ej-guia-mantenimiento-acero"
+                    />
+                  </div>
+
+                  <div className="admin-form-group" style={{ margin: 0 }}>
+                    <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>Tiempo Lectura:</label>
+                    <input 
+                      type="text" 
+                      className="input-admin-text" 
+                      value={blogFormLeido}
+                      onChange={(e) => setBlogFormLeido(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="admin-form-group" style={{ margin: 0 }}>
+                  <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>URL Imagen de Cabecera:</label>
+                  <input 
+                    type="text" 
+                    className="input-admin-text" 
+                    value={blogFormImage}
+                    onChange={(e) => setBlogFormImage(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="admin-form-group" style={{ margin: 0 }}>
+                  <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>Resumen Corto (Meta Descripción SEO):</label>
+                  <textarea 
+                    className="input-admin-text" 
+                    rows={2}
+                    value={blogFormResumen}
+                    onChange={(e) => setBlogFormResumen(e.target.value)}
+                    required
+                    style={{ resize: "vertical", fontFamily: "inherit", fontSize: "0.85rem" }}
+                  />
+                </div>
+
+                <div className="admin-form-group" style={{ margin: 0 }}>
+                  <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>Palabras Clave SEO (separadas por comas):</label>
+                  <input 
+                    type="text" 
+                    className="input-admin-text" 
+                    value={blogFormKeywords}
+                    onChange={(e) => setBlogFormKeywords(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="admin-form-group" style={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px", margin: 0, minHeight: "200px" }}>
+                  <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>Contenido HTML del Artículo:</label>
+                  <textarea 
+                    className="input-admin-text" 
+                    style={{ 
+                      flex: 1, 
+                      fontFamily: "monospace", 
+                      fontSize: "0.8rem", 
+                      lineHeight: "1.4", 
+                      backgroundColor: "#0f172a", 
+                      color: "#94a3b8",
+                      border: "1px solid rgba(255,255,255,0.08)",
+                      borderRadius: "8px",
+                      padding: "10px",
+                      resize: "none"
+                    }}
+                    value={blogFormContent}
+                    onChange={(e) => setBlogFormContent(e.target.value)}
+                    required
+                  />
+                </div>
+
+                {/* Switch de Publicación */}
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "4px" }}>
+                  <input 
+                    type="checkbox" 
+                    id="blogFormPublicado"
+                    checked={blogFormPublicado}
+                    onChange={(e) => setBlogFormPublicado(e.target.checked)}
+                    style={{ width: "18px", height: "18px", cursor: "pointer" }}
+                  />
+                  <label htmlFor="blogFormPublicado" style={{ fontSize: "0.9rem", color: "#ffffff", fontWeight: "600", cursor: "pointer" }}>
+                    🌐 Publicar inmediatamente en el sitio web público
+                  </label>
+                </div>
+
+                {/* Acciones */}
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "14px", marginTop: "8px", flexShrink: 0 }}>
+                  <button type="button" className="btn-admin" onClick={() => setShowBlogEditorModal(false)}>
+                    Cancelar
+                  </button>
+                  <button type="submit" className="btn-admin btn-admin-primary" style={{ padding: "10px 20px" }}>
+                    💾 Guardar Cambios y Publicar
+                  </button>
+                </div>
+
+              </div>
+
+              {/* Columna Derecha: Vista Previa Renderizada en Vivo */}
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, borderLeft: "1px solid rgba(255,255,255,0.08)", paddingLeft: "24px" }}>
+                <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "700", textTransform: "uppercase", marginBottom: "12px", display: "block" }}>
+                  👀 Previsualización del Artículo:
+                </span>
+                
+                {/* Contenedor del Preview simulando el post real */}
+                <div style={{ 
+                  flex: 1, 
+                  overflowY: "auto", 
+                  backgroundColor: "#ffffff", 
+                  color: "#334155", 
+                  borderRadius: "12px", 
+                  padding: "24px",
+                  border: "1px solid rgba(0,0,0,0.1)",
+                  fontFamily: "system-ui, -apple-system, sans-serif"
+                }}>
+                  {/* Cabecera del post */}
+                  <div style={{ marginBottom: "20px" }}>
+                    <div style={{ display: "flex", gap: "12px", fontSize: "0.8rem", color: "#64748b", fontWeight: "600", marginBottom: "8px" }}>
+                      <span>📅 {new Date().toLocaleDateString("es-CL")}</span>
+                      <span>•</span>
+                      <span>⏱️ {blogFormLeido || "5 min de lectura"}</span>
+                    </div>
+                    <h1 style={{ fontSize: "1.8rem", fontWeight: "800", color: "#0f172a", margin: "0 0 10px 0", lineHeight: "1.2" }}>
+                      {blogFormTitle || "Sin Título"}
+                    </h1>
+                    <p style={{ fontSize: "0.95rem", color: "#475569", lineHeight: "1.5", margin: 0, fontStyle: "italic" }}>
+                      {blogFormResumen || "Introduce un resumen para la meta descripción..."}
+                    </p>
+                  </div>
+
+                  {/* Imagen */}
+                  {blogFormImage && (
+                    <div style={{ height: "200px", width: "100%", borderRadius: "8px", overflow: "hidden", marginBottom: "24px" }}>
+                      <img src={blogFormImage} alt={blogFormTitle} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    </div>
+                  )}
+
+                  {/* Cuerpo del Artículo (HTML) */}
+                  <div 
+                    className="blog-rich-content"
+                    dangerouslySetInnerHTML={{ __html: blogFormContent }} 
+                    style={{ 
+                      fontSize: "0.95rem", 
+                      lineHeight: "1.7",
+                      color: "#334155"
+                    }}
+                  />
+                </div>
+              </div>
+
             </form>
           </div>
         </div>

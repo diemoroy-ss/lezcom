@@ -35,6 +35,14 @@ export default function Footer() {
         </Link>
       </div>
 
+      <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', marginBottom: '40px', fontSize: '0.95rem' }}>
+        <Link href="/" style={{ color: '#94a3b8', textDecoration: 'none' }}>Inicio</Link>
+        <span>•</span>
+        <Link href="/blog" style={{ color: '#94a3b8', textDecoration: 'none' }}>Blog IA</Link>
+        <span>•</span>
+        <Link href="/contacto" style={{ color: '#94a3b8', textDecoration: 'none' }}>Contacto</Link>
+      </div>
+
       <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '30px', fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '20px' }}>
         <div>&copy; {new Date().getFullYear()} Lezcom Spa. Todos los derechos reservados.</div>
         <div>

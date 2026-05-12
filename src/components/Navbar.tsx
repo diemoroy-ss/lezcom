@@ -31,6 +31,7 @@ export default function Navbar() {
         <Link href="/#proyectos" onClick={() => setMenuAbierto(false)} style={{ textDecoration: 'none', color: '#64748b', fontWeight: '600' }}>Proyectos</Link>
         <Link href="/#servicios" onClick={() => setMenuAbierto(false)} style={{ textDecoration: 'none', color: '#64748b', fontWeight: '600' }}>Servicios</Link>
         <Link href="/#historia" onClick={() => setMenuAbierto(false)} style={{ textDecoration: 'none', color: '#64748b', fontWeight: '600' }}>Nosotros</Link>
+        <Link href="/blog" onClick={() => setMenuAbierto(false)} style={{ textDecoration: 'none', color: '#64748b', fontWeight: '600' }}>Blog</Link>
         <Link href="/contacto" onClick={() => setMenuAbierto(false)} style={{ textDecoration: 'none', color: '#64748b', fontWeight: '600' }}>Contacto</Link>
         <a 
           href="https://store.lezcom.cl" 
