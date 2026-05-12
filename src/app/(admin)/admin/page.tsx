@@ -1099,13 +1099,14 @@ export default function AdminPage() {
   const executeStartCampaign = async () => {
     const selectedIds = Object.keys(selectedContacts).filter(id => selectedContacts[id]);
 
-    // Inicializar campaña — contadores acumulan sobre el histórico global
-    const prevSent = historicalLogs.filter(l => l.status === "exito").length;
-    const prevFailed = historicalLogs.filter(l => l.status === "error").length;
+    // Contadores locales de la ejecución del momento
+    let localSentCount = 0;
+    let localFailedCount = 0;
+
     setIsSendingCampaign(true);
     setCampaignTotal(selectedIds.length);
-    setCampaignSentCount(prevSent);
-    setCampaignFailedCount(prevFailed);
+    setCampaignSentCount(0);
+    setCampaignFailedCount(0);
     setCampaignProgress(0);
     setConsoleLogs([]); // Limpiar terminal
     
@@ -1139,7 +1140,8 @@ export default function AdminPage() {
 
       if (!template) {
         addLog(`[ERROR] No se encontró plantilla compatible para el Rubro '${contact.Rubro}'.`, "error");
-        setCampaignFailedCount(prev => prev + 1);
+        localFailedCount++;
+        setCampaignFailedCount(localFailedCount);
         
         // Actualizar Firebase a Fallido
         if (db) {
@@ -1227,7 +1229,8 @@ export default function AdminPage() {
           throw new Error(res.error || "Error desconocido");
         }
 
-        setCampaignSentCount(prev => prev + 1);
+        localSentCount++;
+        setCampaignSentCount(localSentCount);
         addLog(`[ENVIADO] Éxito al entregar correo a ${contact.EMAIL}. Message ID: ${res.messageId}`, "success");
 
         // Agregar al historial local inmediatamente
@@ -1272,7 +1275,8 @@ export default function AdminPage() {
       } catch (err: any) {
         // Error
         addLog(`[FALLÓ] Error al enviar a ${contact.EMAIL}: ${err.message}`, "error");
-        setCampaignFailedCount(prev => prev + 1);
+        localFailedCount++;
+        setCampaignFailedCount(localFailedCount);
 
         const updatedTracking: ContactTracking = {
           estadoEnvio: "fallido",
@@ -1324,9 +1328,9 @@ export default function AdminPage() {
     setIsSendingCampaign(false);
     setCurrentProcessingContact(null);
     addLog(`=== CAMPAÑA FINALIZADA ===`, "success");
-    addLog(`Totales -> Éxito: ${campaignSentCount}, Fallidos: ${campaignFailedCount}`, "info");
+    addLog(`Totales -> Éxito: ${localSentCount}, Fallidos: ${localFailedCount}`, "info");
     
-    showNotificationModal("Envío Masivo Finalizado", `El proceso de envío ha terminado de ejecutarse. Enviados con éxito: ${campaignSentCount}, Fallidos: ${campaignFailedCount}.`, "success");
+    showNotificationModal("Envío Masivo Finalizado", `El proceso de envío ha terminado de ejecutarse. Enviados con éxito: ${localSentCount}, Fallidos: ${localFailedCount}.`, "success");
   };
 
   // Detener campaña
