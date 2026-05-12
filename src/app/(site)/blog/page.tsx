@@ -34,14 +34,21 @@ export default function BlogPage() {
       try {
         const q = query(
           collection(db, "blogs"),
-          where("publicado", "==", true),
-          orderBy("fecha", "desc")
+          where("publicado", "==", true)
         );
         const snap = await getDocs(q);
         const list: BlogPost[] = [];
         snap.forEach((doc) => {
           list.push({ id: doc.id, ...doc.data() } as BlogPost);
         });
+
+        // Ordenar en memoria por fecha desc para evitar requerir un índice compuesto en Firestore
+        list.sort((a, b) => {
+          const dateA = a.fecha?.seconds ? a.fecha.seconds * 1000 : new Date(a.fecha || 0).getTime();
+          const dateB = b.fecha?.seconds ? b.fecha.seconds * 1000 : new Date(b.fecha || 0).getTime();
+          return dateB - dateA;
+        });
+
         setPosts(list);
       } catch (err) {
         console.error("Error loading blog posts:", err);

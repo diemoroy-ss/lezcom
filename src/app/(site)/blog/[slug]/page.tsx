@@ -53,19 +53,20 @@ export default function BlogPostDetail() {
           setPost({ id: doc.id, ...doc.data() } as BlogPost);
         }
 
-        // Query recent posts to display as suggestions
+        // Query recent posts to display as suggestions (filtered in-memory to prevent index errors)
         const recentQ = query(
           collection(db, "blogs"),
-          where("publicado", "==", true),
-          where("slug", "!=", slug),
-          limit(3)
+          where("publicado", "==", true)
         );
         const recentSnap = await getDocs(recentQ);
         const recentList: BlogPost[] = [];
         recentSnap.forEach((d) => {
-          recentList.push({ id: d.id, ...d.data() } as BlogPost);
+          const data = { id: d.id, ...d.data() } as BlogPost;
+          if (data.slug !== slug) {
+            recentList.push(data);
+          }
         });
-        setRecentPosts(recentList);
+        setRecentPosts(recentList.slice(0, 3));
 
       } catch (err) {
         console.error("Error loading blog details:", err);
