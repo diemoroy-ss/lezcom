@@ -64,6 +64,8 @@ interface Template {
   id: string;
   Rubro: string;
   Template: string;
+  Ejecutivo?: string;
+  TelefonoEjecutivo?: string;
   ultimoSync?: any;
 }
 
@@ -185,6 +187,8 @@ export default function AdminPage() {
   const [showNewTemplateModal, setShowNewTemplateModal] = useState(false);
   const [newTemplateRubro, setNewTemplateRubro] = useState("");
   const [newTemplateHtml, setNewTemplateHtml] = useState("");
+  const [newTemplateEjecutivo, setNewTemplateEjecutivo] = useState("Gabriel Muñoz");
+  const [newTemplateTelefono, setNewTemplateTelefono] = useState("+56 9 1234 5678");
   const [rubroSelectionType, setRubroSelectionType] = useState<"existing" | "new">("existing");
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [editorPreviewContactId, setEditorPreviewContactId] = useState<string>("");
@@ -300,7 +304,7 @@ export default function AdminPage() {
       });
       setContacts(contactsList);
 
-      // Cargar plantillas
+       // Cargar plantillas
       const templatesSnap = await getDocs(collection(db, "templates"));
       const templatesList: Template[] = [];
       templatesSnap.forEach((doc) => {
@@ -309,6 +313,8 @@ export default function AdminPage() {
           id: doc.id, 
           Rubro: data.Rubro || data.Area || "", 
           Template: data.Template || "",
+          Ejecutivo: data.Ejecutivo || "Gabriel Muñoz",
+          TelefonoEjecutivo: data.TelefonoEjecutivo || "+56 9 1234 5678",
           ultimoSync: data.ultimoSync 
         } as Template);
       });
@@ -503,9 +509,11 @@ export default function AdminPage() {
       const docId = editingTemplateId || rubroVal.toLowerCase().trim().replace(/[^a-z0-9]/g, "_");
       const docRef = doc(db, "templates", docId);
       
-      const newTempObj = {
+       const newTempObj = {
         Rubro: rubroVal,
         Template: newTemplateHtml,
+        Ejecutivo: newTemplateEjecutivo,
+        TelefonoEjecutivo: newTemplateTelefono,
         ultimoSync: new Date()
       };
 
@@ -853,10 +861,14 @@ export default function AdminPage() {
     }
   };
 
-  const renderTemplateWithVariables = (htmlContent: string, contact: Contact) => {
+  const renderTemplateWithVariables = (htmlContent: string, contact: Contact, activeTempOverride?: Partial<Template>) => {
 
     if (!htmlContent) return "";
     let rendered = htmlContent;
+
+    const activeTemp = activeTempOverride || templates.find(t => t.Rubro === contact.Rubro);
+    const ejecutivoVal = activeTemp?.Ejecutivo || "Gabriel Muñoz";
+    const telefonoVal = activeTemp?.TelefonoEjecutivo || "+56 9 1234 5678";
 
     const variables: Record<string, string> = {
       rut: contact.rut || "",
@@ -877,7 +889,9 @@ export default function AdminPage() {
       NombreContacto: contact.NombreContacto || contact.Representante || "",
       CargoContacto: contact.CargoContacto || "",
       CelularContacto: contact.CelularContacto || "",
-      TelefonoContacto: contact.TelefonoContacto || ""
+      TelefonoContacto: contact.TelefonoContacto || "",
+      Ejecutivo: ejecutivoVal,
+      TelefonoEjecutivo: telefonoVal
     };
 
 
@@ -1622,7 +1636,10 @@ export default function AdminPage() {
   // Previsualizador en tiempo real dentro del Creador/Editor de Plantillas
   const modalPreviewContact = contacts.find(c => c.id === editorPreviewContactId);
   const modalPreviewHtml = modalPreviewContact 
-    ? renderTemplateWithVariables(newTemplateHtml, modalPreviewContact)
+    ? renderTemplateWithVariables(newTemplateHtml, modalPreviewContact, {
+        Ejecutivo: newTemplateEjecutivo,
+        TelefonoEjecutivo: newTemplateTelefono
+      })
     : newTemplateHtml;
 
 
@@ -2181,6 +2198,8 @@ export default function AdminPage() {
   </div>
 </body>
 </html>`);
+                  setNewTemplateEjecutivo("Gabriel Muñoz");
+                  setNewTemplateTelefono("+56 9 1234 5678");
                   setEditorPreviewContactId("");
                   setShowNewTemplateModal(true);
                 }}
@@ -2234,6 +2253,8 @@ export default function AdminPage() {
                             setNewTemplateRubro(activeTemp.Rubro);
                             setRubroSelectionType("existing");
                             setNewTemplateHtml(activeTemp.Template);
+                            setNewTemplateEjecutivo(activeTemp.Ejecutivo || "Gabriel Muñoz");
+                            setNewTemplateTelefono(activeTemp.TelefonoEjecutivo || "+56 9 1234 5678");
                             const matching = contacts.find(c => c.Rubro === activeTemp.Rubro);
                             setEditorPreviewContactId(matching ? matching.id : "");
                             setShowNewTemplateModal(true);
@@ -3503,6 +3524,39 @@ export default function AdminPage() {
                   </div>
                 </div>
 
+                {/* Campos de Ejecutivo y Teléfono */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", flexShrink: 0 }}>
+                  <div className="admin-form-group" style={{ margin: 0 }}>
+                    <label style={{ color: "var(--text-secondary)", fontWeight: "600", fontSize: "0.85rem" }}>
+                      👤 Nombre del Ejecutivo Comercial:
+                    </label>
+                    <input 
+                      type="text"
+                      placeholder="Ej: Gabriel Muñoz"
+                      className="input-admin-text"
+                      style={{ marginTop: "6px" }}
+                      value={newTemplateEjecutivo}
+                      onChange={(e) => setNewTemplateEjecutivo(e.target.value)}
+                      required
+                    />
+                  </div>
+
+                  <div className="admin-form-group" style={{ margin: 0 }}>
+                    <label style={{ color: "var(--text-secondary)", fontWeight: "600", fontSize: "0.85rem" }}>
+                      📞 Teléfono del Ejecutivo:
+                    </label>
+                    <input 
+                      type="text"
+                      placeholder="Ej: +56 9 1234 5678"
+                      className="input-admin-text"
+                      style={{ marginTop: "6px" }}
+                      value={newTemplateTelefono}
+                      onChange={(e) => setNewTemplateTelefono(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+
 
                 <div className="admin-form-group" style={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px", margin: 0, minHeight: 0 }}>
                   <label style={{ color: "var(--text-secondary)", fontWeight: "600", fontSize: "0.85rem" }}>
@@ -3553,7 +3607,9 @@ export default function AdminPage() {
                         { code: "CelularContacto", label: "📱 Celular" },
                         { code: "TelefonoContacto", label: "📞 Teléfono" },
                         { code: "SitioWeb", label: "🌐 Sitio Web" },
-                        { code: "Pitch_Personalizado", label: "✨ Pitch Único" }
+                        { code: "Pitch_Personalizado", label: "✨ Pitch Único" },
+                        { code: "Ejecutivo", label: "👤 Ejecutivo" },
+                        { code: "TelefonoEjecutivo", label: "📞 Teléfono Ejec." }
                       ].map((item) => (
                         <button
                           key={item.code}
