@@ -1,0 +1,132 @@
+/* src/app/page.module.css */
+
+.seccion { 
+  padding: 100px 5%; 
+}
+
+/* Efectos Hover elegantes */
+.btnPrimario { 
+  transition: all 0.3s ease; 
+}
+.btnPrimario:hover { 
+  transform: translateY(-3px); 
+  box-shadow: 0 10px 20px rgba(37, 99, 235, 0.4); 
+}
+
+.tarjetaHover { 
+  transition: transform 0.3s ease, box-shadow 0.3s ease; 
+}
+.tarjetaHover:hover { 
+  transform: translateY(-5px); 
+  box-shadow: 0 15px 30px rgba(0,0,0,0.1); 
+}
+
+.galeriaItem { 
+  overflow: hidden; 
+  transition: all 0.3s ease; 
+}
+.galeriaImg { 
+  transition: transform 0.6s ease; 
+}
+.galeriaItem:hover .galeriaImg { 
+  transform: scale(1.08); 
+}
+
+/* Clases de Contenedores */
+.navContainer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 5%;
+  background-color: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.03);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.navLinks {
+  display: flex;
+  gap: 25px;
+  align-items: center;
+}
+
+.heroTitulo {
+  font-size: clamp(3rem, 6vw, 4.5rem);
+  margin: 0 0 20px 0;
+  font-weight: 900;
+  letter-spacing: -1.5px;
+}
+
+.heroBotones {
+  display: flex;
+  gap: 15px;
+  justify-content: center;
+}
+
+.historiaGrid {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 50px;
+  align-items: center;
+}
+
+.historiaFoto {
+  flex: 1 1 400px;
+  background-color: #f1f5f9;
+  height: 350px;
+  border-radius: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  border: 1px dashed #cbd5e1;
+}
+
+/* Ajustes para Celulares (Responsive) */
+@media (max-width: 768px) {
+  .seccion { padding: 60px 5%; }
+  
+  .navContainer { 
+    flex-direction: column; 
+    gap: 15px; 
+    padding: 20px !important; 
+  }
+  
+  .navLinks { 
+    width: 100%; 
+    justify-content: space-between; 
+    gap: 10px !important; 
+  }
+  
+  .navLinks a, .navLinks button { 
+    font-size: 0.85rem !important; 
+  }
+  
+  .heroTitulo { 
+    font-size: 2.2rem !important; 
+    line-height: 1.1 !important; 
+  }
+  
+  .heroBotones { 
+    flex-direction: column; 
+    width: 100%; 
+  }
+  
+  .heroBotones a, .heroBotones button { 
+    width: 100%; 
+    margin-bottom: 10px; 
+  }
+  
+  .historiaGrid { 
+    flex-direction: column; 
+    text-align: center; 
+  }
+  
+  .historiaFoto { 
+    height: 250px !important; 
+  }
+}
