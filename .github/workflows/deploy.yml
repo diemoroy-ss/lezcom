@@ -17,7 +17,7 @@ jobs:
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             # Cargar entorno de Node.js (nvm, npm, pm2)
             export PATH=$PATH:/usr/local/bin:/usr/bin
@@ -30,7 +30,7 @@ jobs:
             echo "NPM: $(npm -v 2>/dev/null || echo 'NO ENCONTRADO')"
             
             # Navegar a la carpeta del proyecto
-            cd /var/www/lezcom-landing || { echo "La carpeta /var/www/lezcom-landing no existe"; exit 1; }
+            cd /var/www/lezcomcl || { echo "La carpeta /var/www/lezcomcl no existe"; exit 1; }
             
             # Actualizar código
             git pull origin main
@@ -39,5 +39,5 @@ jobs:
             npm install
             npm run build
             
-            # Reiniciar la aplicación con PM2
-            pm2 restart lezcom-landing || pm2 start npm --name "lezcom-landing" -- start
+            # Reiniciar la aplicación con PM2 usando ecosystem.config.js
+            pm2 reload ecosystem.config.js --env production || pm2 start ecosystem.config.js --env production
