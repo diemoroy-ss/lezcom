@@ -2,24 +2,24 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
-import { 
-  getDb, 
-  getFirebaseConfig, 
-  FirebaseConfig 
+import {
+  getDb,
+  getFirebaseConfig,
+  FirebaseConfig
 } from "@/lib/firebase";
-import { 
-  collection, 
-  getDocs, 
-  doc, 
-  setDoc, 
-  updateDoc, 
-  addDoc, 
+import {
+  collection,
+  getDocs,
+  doc,
+  setDoc,
+  updateDoc,
+  addDoc,
   deleteDoc,
   writeBatch,
   serverTimestamp,
   query,
   orderBy,
-  limit 
+  limit
 } from "firebase/firestore";
 
 // interfaces
@@ -67,6 +67,18 @@ interface Template {
   Ejecutivo?: string;
   TelefonoEjecutivo?: string;
   ultimoSync?: any;
+  companyId?: string;
+}
+
+export interface CompanyConfig {
+  id: string;
+  nombreEmpresa: string;
+  brevoApiKey: string;
+  senderName: string;
+  senderEmail: string;
+  telefono?: string;
+  direccion?: string;
+  web?: string;
 }
 
 export interface BlogPost {
@@ -140,7 +152,11 @@ export default function AdminPage() {
   const [senderName, setSenderName] = useState("Lezcom SpA");
   const [senderEmail, setSenderEmail] = useState("info@lezcom.cl");
   const [n8nWebhookUrl, setN8nWebhookUrl] = useState("https://n8n.santisoft.cl/webhook/get-email-data");
-  
+
+  // Configuración de Múltiples Cuentas/Empresas de Brevo
+  const [companies, setCompanies] = useState<CompanyConfig[]>([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
+
   // Firebase local state
   const [firebaseConfig, setFirebaseConfig] = useState<FirebaseConfig>({
     apiKey: "",
@@ -155,10 +171,10 @@ export default function AdminPage() {
   // Datos principales
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
-  
+
   // Selección de contactos en la tabla
   const [selectedContacts, setSelectedContacts] = useState<Record<string, boolean>>({});
-  
+
   // Filtros de tabla
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("todos");
@@ -169,7 +185,7 @@ export default function AdminPage() {
   const [csvType, setCsvType] = useState<"contacts" | "templates">("contacts");
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
-  
+
   // Custom Alert / Notification Modal State
   const [notification, setNotification] = useState<{ show: boolean; title: string; message: string; type: "success" | "info" | "error" } | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ show: boolean; type: "single" | "all"; contactId?: string } | null>(null);
@@ -182,7 +198,7 @@ export default function AdminPage() {
   const [showLogsModal, setShowLogsModal] = useState<{ show: boolean; filter: "all" | "exito" | "error" } | null>(null);
 
 
-  
+
   // New Template Creator Modal State
   const [showNewTemplateModal, setShowNewTemplateModal] = useState(false);
   const [newTemplateRubro, setNewTemplateRubro] = useState("");
@@ -207,6 +223,12 @@ export default function AdminPage() {
 
   // Manual Client Creation State
   const [showNewClientModal, setShowNewClientModal] = useState(false);
+  const [showNewCompanyModal, setShowNewCompanyModal] = useState(false);
+  const [newCompanyNameInput, setNewCompanyNameInput] = useState("");
+  const [selectedCompanyIdForTemplates, setSelectedCompanyIdForTemplates] = useState("");
+  const [showDuplicateTemplateModal, setShowDuplicateTemplateModal] = useState(false);
+  const [duplicateTemplateTargetCompanyId, setDuplicateTemplateTargetCompanyId] = useState("");
+  const [templateToDuplicate, setTemplateToDuplicate] = useState<Template | null>(null);
   const [newClientData, setNewClientData] = useState<Partial<Contact>>({
     Rut: "",
     RazonSocial: "",
@@ -248,7 +270,22 @@ export default function AdminPage() {
       setSenderName(localStorage.getItem("lezcom_sender_name") || "Lezcom SpA");
       setSenderEmail(localStorage.getItem("lezcom_sender_email") || "info@lezcom.cl");
       setN8nWebhookUrl(localStorage.getItem("lezcom_n8n_webhook_url") || "");
-      
+
+      const savedCompanies = localStorage.getItem("lezcom_companies");
+      if (savedCompanies) {
+        try {
+          const parsed = JSON.parse(savedCompanies);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setCompanies(parsed);
+          }
+        } catch (e) {
+          console.error("Error al parsear companies de localStorage", e);
+        }
+      }
+
+      const savedSelectedCompany = localStorage.getItem("lezcom_selected_company_id") || "";
+      setSelectedCompanyId(savedSelectedCompany);
+
       const savedFirebase = localStorage.getItem("lezcom_firebase_config");
       if (savedFirebase) {
         try {
@@ -269,6 +306,27 @@ export default function AdminPage() {
     loadDataFromFirebase();
   }, [firebaseConfig]);
 
+  // Sincronizar selección de empresa para plantillas
+  useEffect(() => {
+    if (selectedCompanyId && !selectedCompanyIdForTemplates) {
+      setSelectedCompanyIdForTemplates(selectedCompanyId);
+    }
+  }, [selectedCompanyId]);
+
+  // Auto-seleccionar primer rubro al filtrar plantillas
+  useEffect(() => {
+    const targetCompId = selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom";
+    const filtered = templates.filter(t => (t.companyId || "default_lezcom") === targetCompId);
+    if (filtered.length > 0) {
+      const exists = filtered.some(t => t.Rubro === selectedPreviewTemplate);
+      if (!exists) {
+        setSelectedPreviewTemplate(filtered[0].Rubro);
+      }
+    } else {
+      setSelectedPreviewTemplate("");
+    }
+  }, [selectedCompanyIdForTemplates, selectedCompanyId, templates]);
+
   // Scroll automático en consola de logs
   useEffect(() => {
     if (consoleBottomRef.current) {
@@ -285,9 +343,31 @@ export default function AdminPage() {
       setIsDbLoading(false);
       setContacts([]);
       setTemplates([]);
+
+      // En modo offline, si companies está vacío, inicializar con la configuración local
+      const savedCompanies = localStorage.getItem("lezcom_companies");
+      if (!savedCompanies) {
+        const localKey = localStorage.getItem("lezcom_brevo_api_key") || "";
+        const localSenderName = localStorage.getItem("lezcom_sender_name") || "Lezcom SpA";
+        const localSenderEmail = localStorage.getItem("lezcom_sender_email") || "info@lezcom.cl";
+        const defaultCompany: CompanyConfig = {
+          id: "default_lezcom",
+          nombreEmpresa: "Lezcom SpA",
+          brevoApiKey: localKey,
+          senderName: localSenderName,
+          senderEmail: localSenderEmail,
+          telefono: "+56 9 1234 5678",
+          direccion: "Santiago, Chile",
+          web: "www.lezcom.cl"
+        };
+        setCompanies([defaultCompany]);
+        localStorage.setItem("lezcom_companies", JSON.stringify([defaultCompany]));
+        setSelectedCompanyId("default_lezcom");
+        localStorage.setItem("lezcom_selected_company_id", "default_lezcom");
+      }
       return;
     }
-    
+
     setFirebaseActive(true);
     try {
       // Cargar contactos
@@ -304,21 +384,68 @@ export default function AdminPage() {
       });
       setContacts(contactsList);
 
-       // Cargar plantillas
+      // Cargar plantillas
       const templatesSnap = await getDocs(collection(db, "templates"));
       const templatesList: Template[] = [];
       templatesSnap.forEach((doc) => {
         const data = doc.data();
-        templatesList.push({ 
-          id: doc.id, 
-          Rubro: data.Rubro || data.Area || "", 
+        templatesList.push({
+          id: doc.id,
+          Rubro: data.Rubro || data.Area || "",
           Template: data.Template || "",
           Ejecutivo: data.Ejecutivo || "Gabriel Muñoz",
           TelefonoEjecutivo: data.TelefonoEjecutivo || "+56 9 1234 5678",
-          ultimoSync: data.ultimoSync 
+          ultimoSync: data.ultimoSync,
+          companyId: data.companyId || "default_lezcom"
         } as Template);
       });
       setTemplates(templatesList);
+
+      // Cargar empresas
+      let companiesList: CompanyConfig[] = [];
+      try {
+        const companiesSnap = await getDocs(collection(db, "companies"));
+        companiesSnap.forEach((docSnap) => {
+          companiesList.push({ id: docSnap.id, ...docSnap.data() } as CompanyConfig);
+        });
+      } catch (err) {
+        console.warn("No se pudieron cargar empresas de Firestore:", err);
+      }
+
+      // Si no hay empresas, inicializar con la configuración local
+      if (companiesList.length === 0) {
+        const localKey = localStorage.getItem("lezcom_brevo_api_key") || process.env.BREVO_API_KEY || "";
+        const localSenderName = localStorage.getItem("lezcom_sender_name") || "Lezcom SpA";
+        const localSenderEmail = localStorage.getItem("lezcom_sender_email") || "info@lezcom.cl";
+
+        const defaultCompany: CompanyConfig = {
+          id: "default_lezcom",
+          nombreEmpresa: "Lezcom SpA",
+          brevoApiKey: localKey,
+          senderName: localSenderName,
+          senderEmail: localSenderEmail,
+          telefono: "+56 9 1234 5678",
+          direccion: "Santiago, Chile",
+          web: "www.lezcom.cl"
+        };
+        companiesList = [defaultCompany];
+
+        try {
+          await setDoc(doc(db, "companies", "default_lezcom"), defaultCompany);
+        } catch (e) {
+          console.error("Error al guardar empresa por defecto en Firebase:", e);
+        }
+      }
+
+      setCompanies(companiesList);
+      localStorage.setItem("lezcom_companies", JSON.stringify(companiesList));
+
+      let activeCompanyId = localStorage.getItem("lezcom_selected_company_id") || "";
+      if (!activeCompanyId || !companiesList.some(c => c.id === activeCompanyId)) {
+        activeCompanyId = companiesList[0]?.id || "";
+      }
+      setSelectedCompanyId(activeCompanyId);
+      localStorage.setItem("lezcom_selected_company_id", activeCompanyId);
 
       // Cargar logs históricos de envíos (ordenados por fecha desc, máximo 500)
       try {
@@ -362,7 +489,115 @@ export default function AdminPage() {
     }
   };
 
-  // Función auxiliar para agregar logs a la consola virtual
+  // Empresa Activa Calculada
+  const activeCompany = companies.find(c => c.id === selectedCompanyId) || {
+    id: "default_lezcom",
+    nombreEmpresa: "Lezcom SpA",
+    brevoApiKey: brevoApiKey,
+    senderName: senderName || "Lezcom SpA",
+    senderEmail: senderEmail || "info@lezcom.cl",
+    telefono: "+56 9 1234 5678",
+    direccion: "Santiago, Chile",
+    web: "www.lezcom.cl"
+  };
+
+  // Función para actualizar campos de la empresa seleccionada
+  const updateActiveCompanyField = (field: keyof CompanyConfig, value: string) => {
+    setCompanies(prev => prev.map(c => {
+      if (c.id === selectedCompanyId) {
+        return { ...c, [field]: value };
+      }
+      return c;
+    }));
+  };
+
+  // Abrir modal de creación de empresa
+  const handleCreateNewCompany = () => {
+    setNewCompanyNameInput("");
+    setShowNewCompanyModal(true);
+  };
+
+  // Crear la empresa desde el modal
+  const submitCreateCompany = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const newName = newCompanyNameInput.trim();
+    if (!newName) {
+      showNotificationModal("Campo Requerido", "Por favor ingresa un nombre para la empresa.", "error");
+      return;
+    }
+
+    const newId = "company_" + Date.now();
+    const newCompany: CompanyConfig = {
+      id: newId,
+      nombreEmpresa: newName,
+      brevoApiKey: "",
+      senderName: newName,
+      senderEmail: "",
+      telefono: "",
+      direccion: "",
+      web: ""
+    };
+
+    const updated = [...companies, newCompany];
+    setCompanies(updated);
+    setSelectedCompanyId(newId);
+    localStorage.setItem("lezcom_companies", JSON.stringify(updated));
+    localStorage.setItem("lezcom_selected_company_id", newId);
+
+    const db = getDb();
+    if (db) {
+      try {
+        await setDoc(doc(db, "companies", newId), newCompany);
+        addLog(`Nueva empresa "${newName}" creada en Firestore.`, "success");
+      } catch (err: any) {
+        console.error(err);
+      }
+    }
+
+    setShowNewCompanyModal(false);
+    showNotificationModal("Empresa Creada 🎉", `Se ha registrado "${newName}". Ahora puedes configurar sus datos y API Key de Brevo en este panel.`, "success");
+  };
+
+  // Eliminar la empresa activa actual
+  const handleDeleteActiveCompany = async () => {
+    if (companies.length <= 1) {
+      showNotificationModal("Operación no permitida", "Debes mantener al menos una empresa configurada.", "error");
+      return;
+    }
+
+    const companyToDelete = companies.find(c => c.id === selectedCompanyId);
+    if (!companyToDelete) return;
+
+    const confirmDelete = confirm(`¿Estás seguro de que deseas eliminar la empresa "${companyToDelete.nombreEmpresa}"? Esta acción no se puede deshacer.`);
+    if (!confirmDelete) return;
+
+    const updated = companies.filter(c => c.id !== selectedCompanyId);
+    setCompanies(updated);
+
+    const nextSelectedId = updated[0].id;
+    setSelectedCompanyId(nextSelectedId);
+    localStorage.setItem("lezcom_companies", JSON.stringify(updated));
+    localStorage.setItem("lezcom_selected_company_id", nextSelectedId);
+
+    // Actualizar variables de respaldo para retrocompatibilidad
+    const nextCompany = updated[0];
+    localStorage.setItem("lezcom_brevo_api_key", nextCompany.brevoApiKey);
+    localStorage.setItem("lezcom_sender_name", nextCompany.senderName);
+    localStorage.setItem("lezcom_sender_email", nextCompany.senderEmail);
+
+    const db = getDb();
+    if (db) {
+      try {
+        await deleteDoc(doc(db, "companies", selectedCompanyId));
+        addLog(`Empresa "${companyToDelete.nombreEmpresa}" eliminada de Firestore.`, "success");
+      } catch (err: any) {
+        console.error(err);
+      }
+    }
+
+    showNotificationModal("Empresa Eliminada", `La empresa "${companyToDelete.nombreEmpresa}" ha sido eliminada.`, "success");
+  };
+
   const addLog = (text: string, type: "info" | "success" | "warn" | "error" = "info") => {
     const timestamp = new Date().toLocaleTimeString();
     setConsoleLogs((prev) => [...prev, { text, type, timestamp }]);
@@ -386,10 +621,10 @@ export default function AdminPage() {
       try {
         const data = new Uint8Array(event.target?.result as ArrayBuffer);
         const wb = XLSX.read(data, { type: "array" });
-        
+
         const sheetNames = wb.SheetNames;
-        let clientsSheetName = sheetNames.find(name => 
-          name.toLowerCase().trim() === "clientes" || 
+        let clientsSheetName = sheetNames.find(name =>
+          name.toLowerCase().trim() === "clientes" ||
           name.toLowerCase().includes("cliente")
         ) || sheetNames[0]; // Caer al primero por defecto
 
@@ -400,7 +635,7 @@ export default function AdminPage() {
         }
 
         const parsedClients = XLSX.utils.sheet_to_json(wb.Sheets[clientsSheetName]);
-        
+
         if (parsedClients.length === 0) {
           showNotificationModal("Archivo Vacío", "No se encontraron filas con datos de clientes en la pestaña leída.", "error");
           setIsImportingExcel(false);
@@ -411,7 +646,7 @@ export default function AdminPage() {
         await handleBulkUpsert(parsedClients, []);
 
         showNotificationModal("¡Carga Exitosa! 🎉", `Se han cargado e importado ${parsedClients.length} contactos de forma exitosa en Firestore de Firebase.`, "success");
-        
+
       } catch (err: any) {
         console.error("Error al leer Excel de clientes:", err);
         addLog(`Error al procesar Excel de clientes: ${err.message}`, "error");
@@ -444,7 +679,7 @@ export default function AdminPage() {
     try {
       const docId = (newClientData.Rut?.trim() || emailVal).replace(/\./g, "_");
       const docRef = doc(db, "contacts", docId);
-      
+
       const cleanData: any = {
         Rut: newClientData.Rut?.trim() || "",
         RazonSocial: newClientData.RazonSocial?.trim() || "",
@@ -508,17 +743,18 @@ export default function AdminPage() {
     try {
       const docId = editingTemplateId || rubroVal.toLowerCase().trim().replace(/[^a-z0-9]/g, "_");
       const docRef = doc(db, "templates", docId);
-      
-       const newTempObj = {
+
+      const newTempObj = {
         Rubro: rubroVal,
         Template: newTemplateHtml,
         Ejecutivo: newTemplateEjecutivo,
         TelefonoEjecutivo: newTemplateTelefono,
-        ultimoSync: new Date()
+        ultimoSync: new Date(),
+        companyId: selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom"
       };
 
       await setDoc(docRef, newTempObj, { merge: true });
-      
+
       // Actualizar estado local
       setTemplates(prev => {
         const existingIndex = prev.findIndex(t => t.id === docId);
@@ -540,17 +776,143 @@ export default function AdminPage() {
     }
   };
 
+  // Duplicar plantilla seleccionada para otra empresa
+  const handleDuplicateTemplate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!templateToDuplicate || !duplicateTemplateTargetCompanyId) {
+      showNotificationModal("Error", "Falta seleccionar la plantilla o la empresa de destino.", "error");
+      return;
+    }
+
+    const db = getDb();
+    if (!db) {
+      showNotificationModal("Error de Conexión", "Firebase no está conectado.", "error");
+      return;
+    }
+
+    const targetCompany = companies.find(c => c.id === duplicateTemplateTargetCompanyId);
+    if (!targetCompany) {
+      showNotificationModal("Error", "La empresa destino seleccionada no es válida.", "error");
+      return;
+    }
+
+    try {
+      // El nuevo ID incluye el companyId para evitar colisiones en Firestore
+      const cleanRubro = templateToDuplicate.Rubro.toLowerCase().trim().replace(/[^a-z0-9]/g, "_");
+      const newDocId = `${cleanRubro}_${duplicateTemplateTargetCompanyId}`;
+      const docRef = doc(db, "templates", newDocId);
+
+      const duplicatedTemplateObj = {
+        Rubro: templateToDuplicate.Rubro,
+        Template: templateToDuplicate.Template,
+        Ejecutivo: templateToDuplicate.Ejecutivo || targetCompany.senderName || "Gabriel Muñoz",
+        TelefonoEjecutivo: templateToDuplicate.TelefonoEjecutivo || targetCompany.telefono || "+56 9 1234 5678",
+        ultimoSync: new Date(),
+        companyId: duplicateTemplateTargetCompanyId
+      };
+
+      await setDoc(docRef, duplicatedTemplateObj, { merge: true });
+
+      // Actualizar estado local
+      setTemplates(prev => {
+        const existingIndex = prev.findIndex(t => t.id === newDocId);
+        if (existingIndex > -1) {
+          const updated = [...prev];
+          updated[existingIndex] = { id: newDocId, ...duplicatedTemplateObj };
+          return updated;
+        } else {
+          return [...prev, { id: newDocId, ...duplicatedTemplateObj }];
+        }
+      });
+
+      setShowDuplicateTemplateModal(false);
+      showNotificationModal(
+        "Plantilla Duplicada 🎉",
+        `La plantilla "${templateToDuplicate.Rubro}" ha sido copiada exitosamente a la empresa "${targetCompany.nombreEmpresa}".`,
+        "success"
+      );
+    } catch (err: any) {
+      console.error(err);
+      showNotificationModal("Error al Duplicar", err.message, "error");
+    }
+  };
+
+  // Eliminar plantilla seleccionada
+  const handleDeleteTemplate = async () => {
+    const activeTemp = templates.find(t => t.Rubro === selectedPreviewTemplate && (t.companyId || "default_lezcom") === (selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom"));
+    if (!activeTemp) {
+      showNotificationModal("Error", "No se encontró la plantilla seleccionada para eliminar.", "error");
+      return;
+    }
+
+    if (!window.confirm(`¿Estás seguro de que deseas eliminar la plantilla del Rubro "${activeTemp.Rubro}" para esta empresa? Esta acción no se puede deshacer.`)) {
+      return;
+    }
+
+    const db = getDb();
+    if (!db) {
+      showNotificationModal("Error de Conexión", "Firebase no está conectado.", "error");
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(db, "templates", activeTemp.id));
+
+      // Actualizar estado local
+      setTemplates(prev => prev.filter(t => t.id !== activeTemp.id));
+
+      // Deseleccionar
+      setSelectedPreviewTemplate("");
+
+      showNotificationModal(
+        "Plantilla Eliminada 🗑️",
+        `La plantilla del Rubro "${activeTemp.Rubro}" ha sido eliminada exitosamente de esta empresa.`,
+        "success"
+      );
+    } catch (err: any) {
+      console.error(err);
+      showNotificationModal("Error al Eliminar", err.message, "error");
+    }
+  };
+
 
   // Guardar configuración de Brevo y n8n
-  const handleSaveSettings = (e: React.FormEvent) => {
+  const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    localStorage.setItem("lezcom_brevo_api_key", brevoApiKey);
-    localStorage.setItem("lezcom_sender_name", senderName);
-    localStorage.setItem("lezcom_sender_email", senderEmail);
+    if (!selectedCompanyId) return;
+
+    const companyToSave = companies.find(c => c.id === selectedCompanyId);
+    if (!companyToSave) return;
+
+    if (!companyToSave.nombreEmpresa.trim()) {
+      showNotificationModal("Error", "El nombre de la empresa es obligatorio.", "error");
+      return;
+    }
+
+    // Guardar webhook de n8n global
     localStorage.setItem("lezcom_n8n_webhook_url", n8nWebhookUrl);
-    
-    showNotificationModal("Configuración Guardada", "Las credenciales de mensajería y Webhooks se han guardado localmente.", "success");
-    addLog("Configuración de Brevo y n8n guardada localmente.", "success");
+
+    // Guardar lista de empresas
+    localStorage.setItem("lezcom_companies", JSON.stringify(companies));
+    localStorage.setItem("lezcom_selected_company_id", selectedCompanyId);
+
+    // Guardar valores globales de respaldo para retrocompatibilidad
+    localStorage.setItem("lezcom_brevo_api_key", companyToSave.brevoApiKey);
+    localStorage.setItem("lezcom_sender_name", companyToSave.senderName);
+    localStorage.setItem("lezcom_sender_email", companyToSave.senderEmail);
+
+    const db = getDb();
+    if (db) {
+      try {
+        await setDoc(doc(db, "companies", companyToSave.id), companyToSave);
+        addLog(`Configuración de "${companyToSave.nombreEmpresa}" guardada en Firestore.`, "success");
+      } catch (err: any) {
+        console.error(err);
+        addLog("Error al guardar empresa en Firestore: " + err.message, "error");
+      }
+    }
+
+    showNotificationModal("Configuración Guardada 🎉", `Los datos de "${companyToSave.nombreEmpresa}" y la URL de webhook se han guardado exitosamente.`, "success");
   };
 
   // Guardar configuración de Firebase
@@ -574,7 +936,7 @@ export default function AdminPage() {
     try {
       // Usar proxy interno para saltar CORS
       const response = await fetch(`/api/admin/proxy-sheet?url=${encodeURIComponent(n8nWebhookUrl)}`);
-      
+
       if (!response.ok) {
         throw new Error(`Error del servidor proxy: ${response.statusText}`);
       }
@@ -592,7 +954,7 @@ export default function AdminPage() {
       if (data && typeof data === "object") {
         if (Array.isArray(data.clients)) importedClients = data.clients;
         if (Array.isArray(data.templates)) importedTemplates = data.templates;
-        
+
         // Si no viene en esa estructura sino directo en array
         if (Array.isArray(data) && data.length > 0) {
           // Detectamos si son clientes o plantillas
@@ -612,7 +974,7 @@ export default function AdminPage() {
 
 
       addLog(`Se detectaron ${importedClients.length} contactos y ${importedTemplates.length} plantillas para sincronizar.`, "info");
-      
+
       // Upsert a Firebase
       await handleBulkUpsert(importedClients, importedTemplates);
 
@@ -636,7 +998,7 @@ export default function AdminPage() {
     addLog("Iniciando guardado persistente en Firebase Firestore...", "info");
     const totalRecords = importedClients.length + importedTemplates.length;
     let processedRecords = 0;
-    
+
     try {
       let contactsCount = 0;
       let templatesCount = 0;
@@ -644,11 +1006,11 @@ export default function AdminPage() {
       // Guardar Clientes
       for (const client of importedClients) {
         if (!client.EMAIL && !client.Rut) continue;
-        
+
         // El ID del documento será el EMAIL o el Rut para evitar duplicados
         const docId = (client.Rut || client.EMAIL).replace(/\./g, "_");
         const docRef = doc(db, "contacts", docId);
-        
+
         // Estructura limpia para el cliente
         const clientData: Partial<Contact> = {
           rut: client.rut || "",
@@ -704,16 +1066,17 @@ export default function AdminPage() {
       for (const temp of importedTemplates) {
         const rubroVal = (temp.Rubro || temp.Area || "").trim();
         if (!rubroVal || !temp.Template) continue;
-        
+
         const docId = rubroVal.toLowerCase().trim().replace(/[^a-z0-9]/g, "_");
         const docRef = doc(db, "templates", docId);
-        
+
         await setDoc(docRef, {
           Rubro: rubroVal,
           Template: temp.Template,
-          ultimoSync: new Date()
+          ultimoSync: new Date(),
+          companyId: selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom"
         }, { merge: true });
-        
+
         templatesCount++;
         processedRecords++;
         setImportProgress({
@@ -724,7 +1087,7 @@ export default function AdminPage() {
       }
 
       addLog(`¡Sincronización Firebase exitosa! Se procesaron ${contactsCount} contactos y ${templatesCount} plantillas.`, "success");
-      
+
       // Recargar base de datos local
       setImportProgress(p => ({ ...p, phase: "Recargando datos locales desde Firebase..." }));
       await loadDataFromFirebase();
@@ -748,19 +1111,19 @@ export default function AdminPage() {
       try {
         const data = new Uint8Array(event.target?.result as ArrayBuffer);
         const wb = XLSX.read(data, { type: "array" });
-        
+
         const sheetNames = wb.SheetNames;
         addLog(`Pestañas detectadas en el Excel: ${sheetNames.join(", ")}`, "info");
-        
-        const clientsSheetName = sheetNames.find(name => 
-          name.toLowerCase().trim() === "clientes" || 
+
+        const clientsSheetName = sheetNames.find(name =>
+          name.toLowerCase().trim() === "clientes" ||
           name.toLowerCase().includes("cliente")
         );
-        
-        const templatesSheetName = sheetNames.find(name => 
-          name.toLowerCase().trim() === "template" || 
-          name.toLowerCase().trim() === "templates" || 
-          name.toLowerCase().includes("plantilla") || 
+
+        const templatesSheetName = sheetNames.find(name =>
+          name.toLowerCase().trim() === "template" ||
+          name.toLowerCase().trim() === "templates" ||
+          name.toLowerCase().includes("plantilla") ||
           name.toLowerCase().trim() === "rubro" ||
           name.toLowerCase().trim() === "rubros"
         );
@@ -793,7 +1156,7 @@ export default function AdminPage() {
 
         setShowCSVModal(false);
         showNotificationModal("¡Carga Exitosa! 🎉", `El libro de Excel fue importado con éxito. Se cargaron y sincronizaron ${parsedClients.length} clientes y ${parsedTemplates.length} plantillas en Firestore.`, "success");
-        
+
       } catch (err: any) {
         console.error("Error al leer Excel:", err);
         addLog(`Error al procesar archivo Excel: ${err.message}`, "error");
@@ -821,7 +1184,7 @@ export default function AdminPage() {
       const after = text.substring(end, text.length);
       const inserted = before + `{{${placeholder}}}` + after;
       setNewTemplateHtml(inserted);
-      
+
       // Colocar foco y posicionar cursor después de la variable insertada {{placeholder}}
       setTimeout(() => {
         textarea.focus();
@@ -846,7 +1209,15 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/improve-template", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ htmlContent: newTemplateHtml, rubro: newTemplateRubro })
+        body: JSON.stringify({
+          htmlContent: newTemplateHtml,
+          rubro: newTemplateRubro,
+          companyName: activeCompany.nombreEmpresa,
+          senderName: activeCompany.senderName,
+          senderEmail: activeCompany.senderEmail,
+          phone: activeCompany.telefono,
+          website: activeCompany.web
+        })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -866,11 +1237,17 @@ export default function AdminPage() {
     if (!htmlContent) return "";
     let rendered = htmlContent;
 
-    const activeTemp = activeTempOverride || templates.find(t => t.Rubro === contact.Rubro);
-    const ejecutivoVal = activeTemp?.Ejecutivo || "Gabriel Muñoz";
-    const telefonoVal = activeTemp?.TelefonoEjecutivo || "+56 9 1234 5678";
+    const activeTemp = activeTempOverride || templates.find(t =>
+      t.Rubro === contact.Rubro &&
+      (t.companyId || "default_lezcom") === (selectedCompanyId || "default_lezcom")
+    );
+
+    // Ejecutivo y teléfono: priorizar la plantilla, si no los de la empresa activa
+    const ejecutivoVal = activeTemp?.Ejecutivo || activeCompany.senderName || "Gabriel Muñoz";
+    const telefonoVal = activeTemp?.TelefonoEjecutivo || activeCompany.telefono || "+56 9 1234 5678";
 
     const variables: Record<string, string> = {
+      // Datos del Contacto
       rut: contact.rut || "",
       n: String(contact.n || ""),
       Rut: contact.Rut || "",
@@ -890,8 +1267,33 @@ export default function AdminPage() {
       CargoContacto: contact.CargoContacto || "",
       CelularContacto: contact.CelularContacto || "",
       TelefonoContacto: contact.TelefonoContacto || "",
+
+      // Ejecutivo / Firma
       Ejecutivo: ejecutivoVal,
-      TelefonoEjecutivo: telefonoVal
+      TelefonoEjecutivo: telefonoVal,
+
+      // Datos de la Empresa Activa
+      Empresa: activeCompany.nombreEmpresa,
+      Empresa_Nombre: activeCompany.nombreEmpresa,
+      Company: activeCompany.nombreEmpresa,
+
+      Web: activeCompany.web || "",
+      WebEmpresa: activeCompany.web || "",
+      Empresa_Web: activeCompany.web || "",
+
+      Telefono: activeCompany.telefono || "",
+      TelefonoEmpresa: activeCompany.telefono || "",
+      Empresa_Telefono: activeCompany.telefono || "",
+
+      DireccionEmpresa: activeCompany.direccion || "",
+      Empresa_Direccion: activeCompany.direccion || "",
+
+      Email: activeCompany.senderEmail || "",
+      EmailEmpresa: activeCompany.senderEmail || "",
+      Empresa_Email: activeCompany.senderEmail || "",
+
+      SenderName: activeCompany.senderName || "",
+      SenderEmail: activeCompany.senderEmail || "",
     };
 
 
@@ -915,7 +1317,7 @@ export default function AdminPage() {
     try {
       const docRef = doc(db, "contacts", editingContact.id);
       await setDoc(docRef, editingContact, { merge: true });
-      
+
       // Actualizar estado local
       setContacts(prev => prev.map(c => c.id === editingContact.id ? editingContact : c));
       setShowEditModal(false);
@@ -949,7 +1351,7 @@ export default function AdminPage() {
       console.error(e);
     }
   };
- 
+
   // Eliminar un solo contacto de Firestore
   const handleDeleteContact = async (contactId: string) => {
     const db = getDb();
@@ -982,7 +1384,7 @@ export default function AdminPage() {
         batch.delete(docRef);
       });
       await batch.commit();
-      
+
       setContacts([]);
       setSelectedContacts({});
       addLog(`¡Purga total completada! Se eliminaron ${contacts.length} clientes.`, "success");
@@ -1026,7 +1428,7 @@ export default function AdminPage() {
       }
 
       setContacts(prev => prev.map(c => selectedIds.includes(c.id) ? {
-        ...c, 
+        ...c,
         tracking: {
           estadoEnvio: "pendiente",
           ultimoEnvio: null,
@@ -1049,13 +1451,13 @@ export default function AdminPage() {
   const handleToggleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
     const checked = e.target.checked;
     const newSelected: Record<string, boolean> = {};
-    
+
     if (checked) {
       filteredContacts.forEach(c => {
         newSelected[c.id] = true;
       });
     }
-    
+
     setSelectedContacts(newSelected);
   };
 
@@ -1068,17 +1470,17 @@ export default function AdminPage() {
 
   // Filtrado de contactos en la tabla
   const filteredContacts = contacts.filter((c) => {
-    const matchesSearch = 
+    const matchesSearch =
       (c.RazonSocial?.toLowerCase() || "").includes(searchQuery.toLowerCase()) ||
       (c.EMAIL?.toLowerCase() || "").includes(searchQuery.toLowerCase()) ||
       (c.Representante?.toLowerCase() || "").includes(searchQuery.toLowerCase());
-      
-    const matchesStatus = 
-      statusFilter === "todos" || 
+
+    const matchesStatus =
+      statusFilter === "todos" ||
       c.tracking?.estadoEnvio === statusFilter;
-      
-    const matchesRubro = 
-      rubroFilter === "todos" || 
+
+    const matchesRubro =
+      rubroFilter === "todos" ||
       c.Rubro?.toLowerCase().trim() === rubroFilter.toLowerCase().trim();
 
     return matchesSearch && matchesStatus && matchesRubro;
@@ -1095,33 +1497,32 @@ export default function AdminPage() {
 
   // Probar envío simple con Brevo
   const handleTestBrevoConnection = async () => {
-    if (!brevoApiKey) {
-      showNotificationModal("Configuración Faltante", "Introduce tu API Key de Brevo en la pestaña Configuración antes de probar.", "error");
+    if (!activeCompany.brevoApiKey) {
+      showNotificationModal("Configuración Faltante", `Introduce la API Key de Brevo para la empresa "${activeCompany.nombreEmpresa}" en la pestaña Configuración antes de probar.`, "error");
       return;
     }
 
-
-    const testEmail = prompt("Ingresa un correo destinatario para la prueba:", senderEmail);
+    const testEmail = prompt("Ingresa un correo destinatario para la prueba:", activeCompany.senderEmail || "info@lezcom.cl");
     if (!testEmail) return;
 
     setIsTestingBrevo(true);
-    addLog(`Enviando correo de prueba vía Brevo API a ${testEmail}...`, "info");
+    addLog(`Enviando correo de prueba vía Brevo API a ${testEmail} desde "${activeCompany.nombreEmpresa}"...`, "info");
 
     try {
       const response = await fetch("/api/admin/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          apiKey: brevoApiKey,
-          sender: { name: senderName, email: senderEmail },
+          apiKey: activeCompany.brevoApiKey,
+          sender: { name: activeCompany.senderName, email: activeCompany.senderEmail },
           to: { email: testEmail, name: "Prueba Lezcom" },
-          subject: "Lezcom SpA - Prueba de Conexión de API Brevo",
+          subject: `${activeCompany.nombreEmpresa} - Prueba de Conexión de API Brevo`,
           htmlContent: `
             <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
               <h2 style="color: #3b82f6;">Conexión Brevo API Exitosa 🎉</h2>
               <p>Este es un correo de prueba automatizado enviado desde tu nuevo Panel Administrativo.</p>
               <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;"/>
-              <p style="font-size: 0.8rem; color: #94a3b8;">Lezcom SpA - Integración de correos masivos.</p>
+              <p style="font-size: 0.8rem; color: #94a3b8;">${activeCompany.nombreEmpresa} - Integración de correos masivos.</p>
             </div>
           `
         })
@@ -1137,7 +1538,6 @@ export default function AdminPage() {
       addLog(`Fallo en prueba de conexión de Brevo: ${err.message}`, "error");
       showNotificationModal("Error de Conexión", err.message, "error");
     } finally {
-
       setIsTestingBrevo(false);
     }
   };
@@ -1145,14 +1545,14 @@ export default function AdminPage() {
   // MOTOR DE ENVÍOS MASIVOS EN LOTES (CLIENT-SIDE QUEUES)
   const handleStartCampaign = () => {
     const selectedIds = Object.keys(selectedContacts).filter(id => selectedContacts[id]);
-    
+
     if (selectedIds.length === 0) {
       showNotificationModal("Selección Vacía", "Por favor, selecciona primero los contactos a los que deseas enviar correos en la tabla.", "error");
       return;
     }
 
-    if (!brevoApiKey) {
-      showNotificationModal("Falta Configuración", "Debes ingresar tu API Key de Brevo en la pestaña Configuración antes de iniciar.", "error");
+    if (!activeCompany.brevoApiKey) {
+      showNotificationModal("Falta Configuración", `Debes ingresar la API Key de Brevo para la empresa "${activeCompany.nombreEmpresa}" en la pestaña Configuración antes de iniciar.`, "error");
       setActiveTab("settings");
       return;
     }
@@ -1161,6 +1561,37 @@ export default function AdminPage() {
       showNotificationModal("No hay Plantillas", "No hay plantillas de correo cargadas en el sistema para realizar envíos.", "error");
       return;
     }
+
+    // ── Validación previa: verificar que cada contacto seleccionado tenga plantilla para su rubro ──
+    const contactosSinPlantilla: { razonSocial: string; rubro: string }[] = [];
+    const rubrosSinPlantilla = new Set<string>();
+
+    for (const id of selectedIds) {
+      const contact = contacts.find(c => c.id === id);
+      if (!contact) continue;
+
+      const rubroSanitizado = (contact.Rubro || "").toLowerCase().trim();
+      const tieneTemplate = templates.some(t =>
+        (t.Rubro || "").toLowerCase().trim() === rubroSanitizado &&
+        (t.companyId || "default_lezcom") === (selectedCompanyId || "default_lezcom")
+      );
+
+      if (!tieneTemplate) {
+        contactosSinPlantilla.push({ razonSocial: contact.RazonSocial || contact.EMAIL, rubro: contact.Rubro || "Sin Rubro" });
+        rubrosSinPlantilla.add(contact.Rubro || "Sin Rubro");
+      }
+    }
+
+    if (contactosSinPlantilla.length > 0) {
+      const rubrosListados = Array.from(rubrosSinPlantilla).map(r => `• ${r}`).join("\n");
+      showNotificationModal(
+        "⚠️ Plantillas Faltantes",
+        `No se puede iniciar la campaña. Los siguientes rubros no tienen plantilla de correo asignada:\n\n${rubrosListados}\n\nCrea las plantillas en la pestaña "Plantillas" antes de continuar. (${contactosSinPlantilla.length} contacto(s) afectado(s))`,
+        "error"
+      );
+      return;
+    }
+    // ── Fin validación ──
 
     setCampaignConfirm({ show: true, type: "send", selectedCount: selectedIds.length });
   };
@@ -1179,7 +1610,7 @@ export default function AdminPage() {
     setCampaignFailedCount(0);
     setCampaignProgress(0);
     setConsoleLogs([]); // Limpiar terminal
-    
+
     isSendingRef.current = true;
     addLog(`=== INICIANDO CAMPAÑA DE CORREOS MASIVOS ===`, "info");
     addLog(`Destinatarios seleccionados: ${selectedIds.length}`, "info");
@@ -1204,15 +1635,16 @@ export default function AdminPage() {
       // Buscar plantilla por Rubro (con soporte hacia atrás)
       // Buscamos coincidencia flexible
       const rubroSanitizado = (contact.Rubro || "").toLowerCase().trim();
-      const template = templates.find(t => 
-        (t.Rubro || "").toLowerCase().trim() === rubroSanitizado
+      const template = templates.find(t =>
+        (t.Rubro || "").toLowerCase().trim() === rubroSanitizado &&
+        (t.companyId || "default_lezcom") === (selectedCompanyId || "default_lezcom")
       );
 
       if (!template) {
         addLog(`[ERROR] No se encontró plantilla compatible para el Rubro '${contact.Rubro}'.`, "error");
         localFailedCount++;
         setCampaignFailedCount(localFailedCount);
-        
+
         // Actualizar Firebase a Fallido
         if (db) {
           try {
@@ -1225,14 +1657,14 @@ export default function AdminPage() {
               intentos: (contact.tracking?.intentos || 0) + 1
             };
             await updateDoc(docRef, { tracking: updatedTracking });
-            
+
             // Actualizar estado local
             setContacts(prev => prev.map(c => c.id === contactId ? { ...c, tracking: updatedTracking } : c));
           } catch (e) {
             console.error("Error al escribir en Firestore:", e);
           }
         }
-        
+
         // Agregar al historial local de errores
         setHistoricalLogs(prev => [{
           id: `temp_notempl_${Date.now()}_${i}`,
@@ -1285,8 +1717,8 @@ export default function AdminPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            apiKey: brevoApiKey,
-            sender: { name: senderName, email: senderEmail },
+            apiKey: activeCompany.brevoApiKey,
+            sender: { name: activeCompany.senderName, email: activeCompany.senderEmail },
             to: { email: contact.EMAIL, name: contact.Representante },
             subject: subject,
             htmlContent: renderedHtml
@@ -1326,7 +1758,7 @@ export default function AdminPage() {
         // Guardar resultado en Firebase
         if (db) {
           await updateDoc(doc(db, "contacts", contactId), { tracking: updatedTracking });
-          
+
           // Registrar en bitácora de logs histórica
           await addDoc(collection(db, "logs"), {
             emailCliente: contact.EMAIL,
@@ -1359,7 +1791,7 @@ export default function AdminPage() {
         // Guardar fallo en Firebase
         if (db) {
           await updateDoc(doc(db, "contacts", contactId), { tracking: updatedTracking });
-          
+
           // Registrar en logs
           await addDoc(collection(db, "logs"), {
             emailCliente: contact.EMAIL,
@@ -1399,7 +1831,7 @@ export default function AdminPage() {
     setCurrentProcessingContact(null);
     addLog(`=== CAMPAÑA FINALIZADA ===`, "success");
     addLog(`Totales -> Éxito: ${localSentCount}, Fallidos: ${localFailedCount}`, "info");
-    
+
     showNotificationModal("Envío Masivo Finalizado", `El proceso de envío ha terminado de ejecutarse. Enviados con éxito: ${localSentCount}, Fallidos: ${localFailedCount}.`, "success");
   };
 
@@ -1629,18 +2061,25 @@ export default function AdminPage() {
   // Template activo para visor
   const activeTemplateObj = templates.find(t => t.Rubro === selectedPreviewTemplate);
   const activeContactObj = contacts.find(c => c.id === selectedPreviewContact);
-  const renderedHtmlPreview = activeTemplateObj && activeContactObj 
+  const renderedHtmlPreview = activeTemplateObj && activeContactObj
     ? renderTemplateWithVariables(activeTemplateObj.Template, activeContactObj)
     : activeTemplateObj ? activeTemplateObj.Template : "Selecciona una plantilla y un contacto para previsualizar.";
 
   // Previsualizador en tiempo real dentro del Creador/Editor de Plantillas
   const modalPreviewContact = contacts.find(c => c.id === editorPreviewContactId);
-  const modalPreviewHtml = modalPreviewContact 
+  const modalPreviewHtml = modalPreviewContact
     ? renderTemplateWithVariables(newTemplateHtml, modalPreviewContact, {
-        Ejecutivo: newTemplateEjecutivo,
-        TelefonoEjecutivo: newTemplateTelefono
-      })
+      Ejecutivo: newTemplateEjecutivo,
+      TelefonoEjecutivo: newTemplateTelefono
+    })
     : newTemplateHtml;
+
+  // Filtrar plantillas según la empresa seleccionada en la pestaña de plantillas
+  const filteredTemplates = templates.filter(temp => {
+    const tempCompId = temp.companyId || "default_lezcom";
+    const targetCompId = selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom";
+    return tempCompId === targetCompId;
+  });
 
 
   return (
@@ -1655,31 +2094,31 @@ export default function AdminPage() {
         </div>
 
         <nav className="sidebar-nav">
-          <button 
+          <button
             className={`nav-item ${activeTab === "dashboard" ? "active" : ""}`}
             onClick={() => setActiveTab("dashboard")}
           >
             📊 Cuadro de Mando
           </button>
-          <button 
+          <button
             className={`nav-item ${activeTab === "contacts" ? "active" : ""}`}
             onClick={() => setActiveTab("contacts")}
           >
             👥 Clientes ({contacts.length})
           </button>
-          <button 
+          <button
             className={`nav-item ${activeTab === "templates" ? "active" : ""}`}
             onClick={() => setActiveTab("templates")}
           >
             📄 Plantillas ({templates.length})
           </button>
-          <button 
+          <button
             className={`nav-item ${activeTab === "blogs" ? "active" : ""}`}
             onClick={() => setActiveTab("blogs")}
           >
             ✍️ Blog IA ({blogs.length})
           </button>
-          <button 
+          <button
             className={`nav-item ${activeTab === "settings" ? "active" : ""}`}
             onClick={() => setActiveTab("settings")}
           >
@@ -1714,14 +2153,49 @@ export default function AdminPage() {
             </p>
           </div>
 
-          <div className="header-status-pills">
+          <div className="header-status-pills" style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+            {companies.length > 0 && (
+              <div className="status-indicator-pill" style={{ display: "flex", alignItems: "center", gap: "8px", padding: "4px 10px" }}>
+                <span style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: "600" }}>Empresa Activa:</span>
+                <select
+                  value={selectedCompanyId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setSelectedCompanyId(id);
+                    localStorage.setItem("lezcom_selected_company_id", id);
+                    const active = companies.find(c => c.id === id);
+                    if (active) {
+                      addLog(`Empresa activa cambiada a: ${active.nombreEmpresa}`, "info");
+                    }
+                  }}
+                  style={{
+                    backgroundColor: "rgba(255, 255, 255, 0.05)",
+                    border: "1px solid rgba(255, 255, 255, 0.15)",
+                    borderRadius: "6px",
+                    color: "#ffffff",
+                    fontSize: "0.8rem",
+                    fontWeight: "600",
+                    padding: "3px 8px",
+                    outline: "none",
+                    cursor: "pointer",
+                    transition: "all 0.2s"
+                  }}
+                >
+                  {companies.map(c => (
+                    <option key={c.id} value={c.id} style={{ backgroundColor: "#1e1e2e", color: "#ffffff" }}>
+                      {c.nombreEmpresa}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="status-indicator-pill">
               <span className={`status-dot ${firebaseActive ? "online" : "offline"}`}></span>
               Firebase: {firebaseActive ? "Conectado" : "Desconectado"}
             </div>
             <div className="status-indicator-pill">
-              <span className={`status-dot ${brevoApiKey ? "online" : "offline"}`}></span>
-              Brevo API: {brevoApiKey ? "Cargada" : "Falta Key"}
+              <span className={`status-dot ${activeCompany.brevoApiKey ? "online" : "offline"}`}></span>
+              Brevo API: {activeCompany.brevoApiKey ? "Cargada" : "Falta Key"}
             </div>
           </div>
         </header>
@@ -1758,7 +2232,7 @@ export default function AdminPage() {
                 <div className="stat-desc">Areas con correo HTML asignado.</div>
               </div>
 
-              <div 
+              <div
                 className="glass-card stat-card green"
                 style={{ cursor: "pointer", transition: "transform 0.15s ease, box-shadow 0.15s ease" }}
                 onClick={() => setShowLogsModal(prev => prev?.filter === "exito" ? null : { show: true, filter: "exito" })}
@@ -1776,7 +2250,7 @@ export default function AdminPage() {
                 <div className="stat-desc">Total histórico de correos entregados. <span style={{ textDecoration: "underline", fontSize: "0.7rem" }}>{showLogsModal?.filter === "exito" ? "Ocultar ↑" : "Ver detalle →"}</span></div>
               </div>
 
-              <div 
+              <div
                 className="glass-card stat-card red"
                 style={{ cursor: "pointer", transition: "transform 0.15s ease, box-shadow 0.15s ease" }}
                 onClick={() => setShowLogsModal(prev => prev?.filter === "error" ? null : { show: true, filter: "error" })}
@@ -1808,7 +2282,7 @@ export default function AdminPage() {
                       Registros persistentes ordenados del más reciente al más antiguo
                     </p>
                   </div>
-                  <button 
+                  <button
                     className="btn-admin"
                     onClick={() => setShowLogsModal(null)}
                     style={{ padding: "6px 14px", fontSize: "0.8rem" }}
@@ -1819,21 +2293,21 @@ export default function AdminPage() {
 
                 {/* Filtros */}
                 <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
-                  <button 
+                  <button
                     className={`btn-admin ${showLogsModal.filter === "all" ? "btn-admin-primary" : ""}`}
                     style={{ padding: "6px 14px", fontSize: "0.8rem" }}
                     onClick={() => setShowLogsModal({ show: true, filter: "all" })}
                   >
                     📋 Todos ({historicalLogs.length})
                   </button>
-                  <button 
+                  <button
                     className={`btn-admin ${showLogsModal.filter === "exito" ? "btn-admin-success" : ""}`}
                     style={{ padding: "6px 14px", fontSize: "0.8rem" }}
                     onClick={() => setShowLogsModal({ show: true, filter: "exito" })}
                   >
                     ✔️ Exitosos ({historicalLogs.filter(l => l.status === "exito").length})
                   </button>
-                  <button 
+                  <button
                     className={`btn-admin ${showLogsModal.filter === "error" ? "btn-admin-danger" : ""}`}
                     style={{ padding: "6px 14px", fontSize: "0.8rem" }}
                     onClick={() => setShowLogsModal({ show: true, filter: "error" })}
@@ -1845,10 +2319,10 @@ export default function AdminPage() {
                 {/* Tabla de logs */}
                 <div style={{ maxHeight: "450px", overflowY: "auto" }}>
                   {(() => {
-                    const filtered = showLogsModal.filter === "all" 
-                      ? historicalLogs 
+                    const filtered = showLogsModal.filter === "all"
+                      ? historicalLogs
                       : historicalLogs.filter(l => l.status === showLogsModal.filter);
-                    
+
                     if (filtered.length === 0) {
                       return (
                         <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--text-secondary)" }}>
@@ -1904,8 +2378,8 @@ export default function AdminPage() {
                                     </span>
                                   </td>
                                   <td style={{ fontSize: "0.75rem", color: log.status === "exito" ? "#a7f3d0" : "#fca5a5", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    {log.status === "exito" 
-                                      ? (log.mensajeId ? `ID: ${log.mensajeId}` : "Enviado OK") 
+                                    {log.status === "exito"
+                                      ? (log.mensajeId ? `ID: ${log.mensajeId}` : "Enviado OK")
                                       : (log.error || "Error desconocido")
                                     }
                                   </td>
@@ -1934,9 +2408,9 @@ export default function AdminPage() {
               <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", flex: 1, alignItems: "center" }}>
                 <div className="search-wrapper">
 
-                  <input 
-                    type="text" 
-                    placeholder="Buscar por Empresa, Correo, Representante..." 
+                  <input
+                    type="text"
+                    placeholder="Buscar por Empresa, Correo, Representante..."
                     className="search-input"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
@@ -1944,7 +2418,7 @@ export default function AdminPage() {
                   <span className="search-icon">🔍</span>
                 </div>
 
-                <select 
+                <select
                   className="select-admin"
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
@@ -1956,7 +2430,7 @@ export default function AdminPage() {
                   <option value="fallido">Fallidos</option>
                 </select>
 
-                <select 
+                <select
                   className="select-admin"
                   value={rubroFilter}
                   onChange={(e) => setRubroFilter(e.target.value)}
@@ -1969,7 +2443,7 @@ export default function AdminPage() {
               </div>
 
               <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                <button 
+                <button
                   className="btn-admin btn-admin-primary"
                   onClick={() => {
                     setNewClientData({
@@ -1985,13 +2459,13 @@ export default function AdminPage() {
                 >
                   ➕ Crear Cliente Manual
                 </button>
-                <button 
+                <button
                   className="btn-admin"
                   onClick={() => clientOnlyFileInputRef.current?.click()}
                 >
                   📥 Importar Excel (Clientes)
                 </button>
-                <button 
+                <button
                   className="btn-admin btn-admin-danger"
                   onClick={() => setDeleteConfirm({ show: true, type: "all" })}
                   disabled={contacts.length === 0}
@@ -1999,10 +2473,10 @@ export default function AdminPage() {
                 >
                   🗑️ Eliminar Todos
                 </button>
-                <input 
-                  type="file" 
+                <input
+                  type="file"
                   ref={clientOnlyFileInputRef}
-                  accept=".xlsx, .xls" 
+                  accept=".xlsx, .xls"
                   style={{ display: "none" }}
                   onChange={handleClientOnlyExcelUpload}
                 />
@@ -2012,13 +2486,13 @@ export default function AdminPage() {
               <div className="button-group" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                 {Object.keys(selectedContacts).filter(id => selectedContacts[id]).length > 0 && (
                   <>
-                    <button 
+                    <button
                       className="btn-admin btn-admin-danger"
                       onClick={handleBulkResetStatus}
                     >
                       🔄 Reset a Pendiente ({Object.keys(selectedContacts).filter(id => selectedContacts[id]).length})
                     </button>
-                    <button 
+                    <button
                       className="btn-admin btn-admin-primary"
                       onClick={() => { setActiveTab("dashboard"); handleStartCampaign(); }}
                     >
@@ -2044,7 +2518,7 @@ export default function AdminPage() {
                   <thead>
                     <tr>
                       <th style={{ width: "40px", textAlign: "center" }}>
-                        <input 
+                        <input
                           type="checkbox"
                           className="checkbox-admin"
                           onChange={handleToggleSelectAll}
@@ -2063,12 +2537,12 @@ export default function AdminPage() {
                   </thead>
                   <tbody>
                     {filteredContacts.map((contact, idx) => (
-                      <tr 
+                      <tr
                         key={contact.id}
                         className={selectedContacts[contact.id] ? "selected" : ""}
                       >
                         <td style={{ textAlign: "center" }}>
-                          <input 
+                          <input
                             type="checkbox"
                             className="checkbox-admin"
                             checked={!!selectedContacts[contact.id]}
@@ -2089,9 +2563,9 @@ export default function AdminPage() {
                           </span>
                         </td>
                         <td>
-                          <span 
+                          <span
                             className={`badge-status ${contact.tracking?.estadoEnvio || "pendiente"}`}
-                            style={{ 
+                            style={{
                               cursor: (contact.tracking?.estadoEnvio === "fallido" || contact.tracking?.estadoEnvio === "enviado") ? "pointer" : "default",
                               transition: "all 0.15s ease",
                               display: "inline-flex",
@@ -2128,16 +2602,16 @@ export default function AdminPage() {
                         </td>
                         <td>
                           <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                            <button 
-                              className="btn-admin" 
+                            <button
+                              className="btn-admin"
                               style={{ padding: "6px 8px", fontSize: "0.8rem" }}
                               onClick={() => { setEditingContact(contact); setShowEditModal(true); }}
                               title="Editar Contacto"
                             >
                               ✏️
                             </button>
-                            <button 
-                              className="btn-admin" 
+                            <button
+                              className="btn-admin"
                               style={{ padding: "6px 8px", fontSize: "0.8rem" }}
                               onClick={() => handleResetContactStatus(contact.id)}
                               title="Restablecer"
@@ -2145,8 +2619,8 @@ export default function AdminPage() {
                               🔄
                             </button>
                             {(contact.tracking?.estadoEnvio === "pendiente" || contact.tracking?.estadoEnvio === "fallido" || !contact.tracking?.estadoEnvio) && (
-                              <button 
-                                className="btn-admin btn-admin-danger" 
+                              <button
+                                className="btn-admin btn-admin-danger"
                                 style={{ padding: "6px 8px", fontSize: "0.8rem" }}
                                 onClick={() => setDeleteConfirm({ show: true, type: "single", contactId: contact.id })}
                                 title="Eliminar Cliente"
@@ -2174,9 +2648,26 @@ export default function AdminPage() {
             ============================================== */}
         {activeTab === "templates" && (
           <div className="glass-card">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "12px" }}>
-              <h3 style={{ fontSize: "1.1rem" }}>Gestión de Plantillas por Rubro</h3>
-              <button 
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "12px", flexWrap: "wrap", gap: "16px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "24px", flexWrap: "wrap" }}>
+                <h3 style={{ fontSize: "1.1rem", margin: 0 }}>Gestión de Plantillas por Rubro</h3>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span style={{ fontSize: "0.85rem", color: "var(--text-muted)", fontWeight: "500" }}>Empresa:</span>
+                  <select
+                    value={selectedCompanyIdForTemplates || selectedCompanyId}
+                    onChange={(e) => setSelectedCompanyIdForTemplates(e.target.value)}
+                    className="input-admin-text"
+                    style={{ maxWidth: "220px", height: "34px", padding: "0 10px", fontSize: "0.8rem", cursor: "pointer", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "6px" }}
+                  >
+                    {companies.map(c => (
+                      <option key={c.id} value={c.id} style={{ backgroundColor: "#12121f" }}>
+                        {c.nombreEmpresa}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <button
                 className="btn-admin btn-admin-primary"
                 onClick={() => {
                   setNewTemplateRubro("");
@@ -2208,17 +2699,17 @@ export default function AdminPage() {
               </button>
             </div>
 
-            {templates.length === 0 ? (
+            {filteredTemplates.length === 0 ? (
               <div style={{ padding: "40px 0", textAlign: "center", color: "var(--text-secondary)" }}>
-                📭 No hay plantillas HTML en el sistema. Presiona "Crear Nueva Plantilla" o importa tu Excel para iniciar.
+                📭 No hay plantillas HTML en el sistema para esta empresa. Presiona "Crear Nueva Plantilla" o importa tu Excel para iniciar.
               </div>
             ) : (
               <div className="preview-split">
                 {/* Lado izquierdo: Lista de plantillas */}
                 <div className="preview-list">
-                  <h4 style={{ fontSize: "0.9rem", color: "var(--text-muted)", marginBottom: "8px" }}>RUBROS DISPONIBLES ({templates.length})</h4>
-                  {templates.map((temp) => (
-                    <button 
+                  <h4 style={{ fontSize: "0.9rem", color: "var(--text-muted)", marginBottom: "8px" }}>RUBROS DISPONIBLES ({filteredTemplates.length})</h4>
+                  {filteredTemplates.map((temp) => (
+                    <button
                       key={temp.id}
                       className={`template-card-selector ${selectedPreviewTemplate === temp.Rubro ? "active" : ""}`}
                       onClick={() => setSelectedPreviewTemplate(temp.Rubro)}
@@ -2247,7 +2738,7 @@ export default function AdminPage() {
                         className="btn-admin btn-admin-success"
                         style={{ padding: "6px 14px", fontSize: "0.8rem", display: "flex", alignItems: "center", gap: "6px" }}
                         onClick={() => {
-                          const activeTemp = templates.find(t => t.Rubro === selectedPreviewTemplate);
+                          const activeTemp = templates.find(t => t.Rubro === selectedPreviewTemplate && (t.companyId || "default_lezcom") === (selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom"));
                           if (activeTemp) {
                             setEditingTemplateId(activeTemp.id);
                             setNewTemplateRubro(activeTemp.Rubro);
@@ -2263,9 +2754,31 @@ export default function AdminPage() {
                       >
                         📝 Editar Plantilla
                       </button>
+                      <button
+                        className="btn-admin btn-admin-primary"
+                        style={{ padding: "6px 14px", fontSize: "0.8rem", display: "flex", alignItems: "center", gap: "6px" }}
+                        onClick={() => {
+                          const activeTemp = templates.find(t => t.Rubro === selectedPreviewTemplate && (t.companyId || "default_lezcom") === (selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom"));
+                          if (activeTemp) {
+                            setTemplateToDuplicate(activeTemp);
+                            const otherCompanies = companies.filter(c => c.id !== (activeTemp.companyId || "default_lezcom"));
+                            setDuplicateTemplateTargetCompanyId(otherCompanies.length > 0 ? otherCompanies[0].id : "");
+                            setShowDuplicateTemplateModal(true);
+                          }
+                        }}
+                      >
+                        👯 Duplicar
+                      </button>
+                      <button
+                        className="btn-admin"
+                        style={{ padding: "6px 14px", fontSize: "0.8rem", display: "flex", alignItems: "center", gap: "6px", backgroundColor: "#ef4444", border: "1px solid rgba(239,68,68,0.2)", color: "white" }}
+                        onClick={handleDeleteTemplate}
+                      >
+                        🗑️ Eliminar
+                      </button>
                       <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Ver con cliente:</span>
-                      <select 
-                        className="select-admin" 
+                      <select
+                        className="select-admin"
                         style={{ padding: "6px 24px 6px 12px", fontSize: "0.8rem" }}
                         value={selectedPreviewContact}
                         onChange={(e) => setSelectedPreviewContact(e.target.value)}
@@ -2279,7 +2792,7 @@ export default function AdminPage() {
                   </div>
 
                   {/* Sandbox de Render */}
-                  <iframe 
+                  <iframe
                     className="preview-iframe"
                     title="Render HTML"
                     srcDoc={renderedHtmlPreview}
@@ -2296,16 +2809,16 @@ export default function AdminPage() {
             ============================================== */}
         {activeTab === "blogs" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-            
+
             {/* PANEL DE GENERACIÓN CON IA */}
             <div className="glass-card" style={{ padding: "24px", position: "relative", overflow: "hidden" }}>
               {/* Efecto de luz de fondo sutil */}
               <div style={{ position: "absolute", top: "-50px", right: "-50px", width: "150px", height: "150px", borderRadius: "50%", background: "radial-gradient(circle, rgba(99,102,241,0.15) 0%, transparent 70%)", pointerEvents: "none" }}></div>
-              
+
               <h3 style={{ display: "flex", alignItems: "center", gap: "10px", margin: "0 0 16px 0", fontSize: "1.2rem", fontWeight: "700" }}>
                 <span>✨ Redacción de Blogs con Inteligencia Artificial (SEO)</span>
               </h3>
-              
+
               <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", margin: "0 0 20px 0", lineHeight: "1.5" }}>
                 Introduce un tema de interés para tus clientes potenciales (ej: "mantenimiento de mesones de acero" o "por qué preferir acero AISI 304"). Nuestra IA (Gemini 2.0 Flash) investigará y redactará un artículo completo optimizado para posicionamiento SEO con jerarquía HTML semántica, subtítulos, meta etiquetas y llamados a la acción automáticos hacia Lezcom.
               </p>
@@ -2315,7 +2828,7 @@ export default function AdminPage() {
                   <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600", marginBottom: "6px", display: "block" }}>
                     📝 Tema o Palabra Clave Semilla:
                   </label>
-                  <input 
+                  <input
                     type="text"
                     className="input-admin-text"
                     placeholder="Ej. Guía para diseñar una cocina industrial higiénica en Santiago..."
@@ -2330,7 +2843,7 @@ export default function AdminPage() {
                   <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600", marginBottom: "6px", display: "block" }}>
                     🎯 Palabras Clave Adicionales (opcional, separadas por comas):
                   </label>
-                  <input 
+                  <input
                     type="text"
                     className="input-admin-text"
                     placeholder="Ej. cocinas industriales chile, acero inoxidable gastronomico, mesones..."
@@ -2360,13 +2873,13 @@ export default function AdminPage() {
                 </div>
 
                 <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end", marginTop: "4px" }}>
-                  <button 
-                    type="submit" 
+                  <button
+                    type="submit"
                     className="btn-admin btn-admin-primary"
                     disabled={isGeneratingBlog || !newBlogTopic.trim()}
-                    style={{ 
-                      padding: "12px 24px", 
-                      fontSize: "0.9rem", 
+                    style={{
+                      padding: "12px 24px",
+                      fontSize: "0.9rem",
                       background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
                       border: "none",
                       boxShadow: "0 4px 12px rgba(99, 102, 241, 0.3)"
@@ -2391,9 +2904,9 @@ export default function AdminPage() {
               <div className="glass-card" style={{ padding: "20px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
                   <h4 style={{ margin: 0, fontSize: "1rem", fontWeight: "700" }}>💡 Temas y Palabras Clave Recomendados</h4>
-                  <button 
-                    type="button" 
-                    className="btn-admin btn-admin-primary" 
+                  <button
+                    type="button"
+                    className="btn-admin btn-admin-primary"
                     onClick={handleGetIdeas}
                     disabled={isGeneratingIdeas}
                     style={{ padding: "6px 12px", fontSize: "0.8rem" }}
@@ -2401,7 +2914,7 @@ export default function AdminPage() {
                     {isGeneratingIdeas ? "Buscando..." : "Sugerir con IA"}
                   </button>
                 </div>
-                
+
                 {suggestedIdeas.length === 0 ? (
                   <div style={{ textAlign: "center", padding: "30px 10px", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
                     Presiona "Sugerir con IA" para obtener 5 ideas de alta relevancia comercial y SEO para Lezcom.
@@ -2409,12 +2922,12 @@ export default function AdminPage() {
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
                     {suggestedIdeas.map((idea, i) => (
-                      <div 
-                        key={i} 
-                        style={{ 
-                          padding: "12px", 
-                          backgroundColor: "rgba(255,255,255,0.03)", 
-                          border: "1px solid rgba(255,255,255,0.06)", 
+                      <div
+                        key={i}
+                        style={{
+                          padding: "12px",
+                          backgroundColor: "rgba(255,255,255,0.03)",
+                          border: "1px solid rgba(255,255,255,0.06)",
                           borderRadius: "8px",
                           cursor: "pointer",
                           transition: "background-color 0.2s"
@@ -2443,9 +2956,9 @@ export default function AdminPage() {
               <div className="glass-card" style={{ padding: "20px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
                   <h4 style={{ margin: 0, fontSize: "1rem", fontWeight: "700" }}>📅 Calendario Editorial de Contenidos</h4>
-                  <button 
-                    type="button" 
-                    className="btn-admin btn-admin-success" 
+                  <button
+                    type="button"
+                    className="btn-admin btn-admin-success"
                     onClick={handleGetCalendar}
                     disabled={isGeneratingCalendar}
                     style={{ padding: "6px 12px", fontSize: "0.8rem" }}
@@ -2461,12 +2974,12 @@ export default function AdminPage() {
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: "380px", overflowY: "auto", paddingRight: "4px" }}>
                     {suggestedCalendar.map((item, i) => (
-                      <div 
-                        key={i} 
-                        style={{ 
-                          padding: "12px", 
-                          backgroundColor: "rgba(16, 185, 129, 0.03)", 
-                          border: "1px solid rgba(16, 185, 129, 0.1)", 
+                      <div
+                        key={i}
+                        style={{
+                          padding: "12px",
+                          backgroundColor: "rgba(16, 185, 129, 0.03)",
+                          border: "1px solid rgba(16, 185, 129, 0.1)",
                           borderRadius: "8px",
                           cursor: "pointer",
                           transition: "background-color 0.2s"
@@ -2502,7 +3015,7 @@ export default function AdminPage() {
             <div className="glass-card" style={{ padding: "24px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "12px" }}>
                 <h3 style={{ fontSize: "1.1rem", margin: 0, fontWeight: "700" }}>Artículos del Blog ({blogs.length})</h3>
-                <button 
+                <button
                   className="btn-admin btn-admin-success"
                   onClick={() => {
                     setSelectedBlog(null);
@@ -2534,14 +3047,14 @@ export default function AdminPage() {
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "20px" }}>
                   {blogs.map((blog) => (
-                    <div 
-                      key={blog.id} 
-                      className="glass-card" 
-                      style={{ 
-                        display: "flex", 
-                        flexDirection: "column", 
-                        overflow: "hidden", 
-                        border: "1px solid rgba(255,255,255,0.06)", 
+                    <div
+                      key={blog.id}
+                      className="glass-card"
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        overflow: "hidden",
+                        border: "1px solid rgba(255,255,255,0.06)",
                         borderRadius: "12px",
                         background: "rgba(30, 41, 59, 0.4)",
                         transition: "transform 0.2s, box-shadow 0.2s",
@@ -2550,22 +3063,22 @@ export default function AdminPage() {
                     >
                       {/* Imagen de Cabecera del Post */}
                       <div style={{ position: "relative", height: "160px", width: "100%", overflow: "hidden", backgroundColor: "#1e293b" }}>
-                        <img 
-                          src={blog.imagen} 
-                          alt={blog.titulo} 
-                          style={{ width: "100%", height: "100%", objectFit: "cover" }} 
+                        <img
+                          src={blog.imagen}
+                          alt={blog.titulo}
+                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
                           onError={(e: any) => {
                             e.target.src = "https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=600&q=80";
                           }}
                         />
-                        <span style={{ 
-                          position: "absolute", 
-                          top: "12px", 
-                          right: "12px", 
-                          padding: "4px 10px", 
-                          borderRadius: "20px", 
-                          fontSize: "0.75rem", 
-                          fontWeight: "bold", 
+                        <span style={{
+                          position: "absolute",
+                          top: "12px",
+                          right: "12px",
+                          padding: "4px 10px",
+                          borderRadius: "20px",
+                          fontSize: "0.75rem",
+                          fontWeight: "bold",
                           background: blog.publicado ? "rgba(16, 185, 129, 0.9)" : "rgba(100, 116, 139, 0.9)",
                           color: "#ffffff"
                         }}>
@@ -2580,11 +3093,11 @@ export default function AdminPage() {
                             <span>{blog.fecha ? new Date(blog.fecha.seconds ? blog.fecha.seconds * 1000 : blog.fecha).toLocaleDateString("es-CL") : ""}</span>
                             <span>⏱️ {blog.leido}</span>
                           </div>
-                          
+
                           <h4 style={{ fontSize: "1rem", fontWeight: "700", color: "#ffffff", marginBottom: "8px", lineHeight: "1.4", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
                             {blog.titulo}
                           </h4>
-                          
+
                           <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", lineHeight: "1.5", marginBottom: "16px", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}>
                             {blog.resumen}
                           </p>
@@ -2592,20 +3105,20 @@ export default function AdminPage() {
 
                         {/* Botones de acción */}
                         <div style={{ display: "flex", gap: "8px", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "14px", marginTop: "10px" }}>
-                          <button 
-                            className="btn-admin" 
+                          <button
+                            className="btn-admin"
                             style={{ flex: 1, padding: "6px 0", fontSize: "0.75rem", justifyContent: "center" }}
                             onClick={() => handleEditBlog(blog)}
                           >
                             📝 Editar
                           </button>
-                          
-                          <button 
-                            className="btn-admin" 
-                            style={{ 
-                              flex: 1.2, 
-                              padding: "6px 0", 
-                              fontSize: "0.75rem", 
+
+                          <button
+                            className="btn-admin"
+                            style={{
+                              flex: 1.2,
+                              padding: "6px 0",
+                              fontSize: "0.75rem",
                               justifyContent: "center",
                               backgroundColor: blog.publicado ? "rgba(239, 68, 68, 0.1)" : "rgba(16, 185, 129, 0.1)",
                               color: blog.publicado ? "#f87171" : "#34d399",
@@ -2616,8 +3129,8 @@ export default function AdminPage() {
                             {blog.publicado ? "💤 Desactivar" : "🌐 Publicar"}
                           </button>
 
-                          <button 
-                            className="btn-admin btn-admin-danger" 
+                          <button
+                            className="btn-admin btn-admin-danger"
                             style={{ padding: "6px 10px", fontSize: "0.75rem", display: "flex", justifyContent: "center", alignItems: "center" }}
                             onClick={() => handleDeleteBlog(blog.id)}
                             title="Eliminar"
@@ -2665,49 +3178,135 @@ export default function AdminPage() {
               <div className="settings-grid">
                 {/* CREDENCIALES MENSAJERIA */}
                 <div className="glass-card">
-                  <h3 style={{ marginBottom: "18px", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "10px" }}>📧 Configuración de Brevo y n8n</h3>
+                  <h3 style={{ marginBottom: "18px", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: "10px" }}>📧 Configuración de Cuentas Brevo y Empresas</h3>
+
+                  <div style={{ display: "flex", gap: "10px", marginBottom: "20px", alignItems: "flex-end" }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ display: "block", fontSize: "0.8rem", color: "var(--text-secondary)", marginBottom: "6px", fontWeight: "600" }}>
+                        Seleccionar Empresa a Configurar:
+                      </label>
+                      <select
+                        value={selectedCompanyId}
+                        onChange={(e) => {
+                          setSelectedCompanyId(e.target.value);
+                          localStorage.setItem("lezcom_selected_company_id", e.target.value);
+                        }}
+                        className="input-admin-text"
+                        style={{ height: "40px", cursor: "pointer" }}
+                      >
+                        {companies.map(c => (
+                          <option key={c.id} value={c.id} style={{ backgroundColor: "#1e1e2e" }}>
+                            {c.nombreEmpresa}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-admin btn-admin-primary"
+                      onClick={handleCreateNewCompany}
+                      style={{ height: "40px", padding: "0 16px" }}
+                    >
+                      ➕ Nueva
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-admin btn-admin-danger"
+                      onClick={handleDeleteActiveCompany}
+                      disabled={companies.length <= 1}
+                      style={{ height: "40px", padding: "0 16px" }}
+                    >
+                      🗑️ Eliminar
+                    </button>
+                  </div>
+
                   <form onSubmit={handleSaveSettings}>
                     <div className="admin-form-group">
+                      <label>Nombre de la Empresa / Cuenta:</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: Lezcom SpA"
+                        className="input-admin-text"
+                        value={activeCompany.nombreEmpresa || ""}
+                        onChange={(e) => updateActiveCompanyField("nombreEmpresa", e.target.value)}
+                        required
+                      />
+                    </div>
+
+                    <div className="admin-form-group">
                       <label>API Key de Brevo (v3 REST Key):</label>
-                      <input 
-                        type="password" 
-                        placeholder="xkeysib-..." 
+                      <input
+                        type="password"
+                        placeholder="xkeysib-..."
                         className="input-admin-text"
-                        value={brevoApiKey}
-                        onChange={(e) => setBrevoApiKey(e.target.value)}
+                        value={activeCompany.brevoApiKey || ""}
+                        onChange={(e) => updateActiveCompanyField("brevoApiKey", e.target.value)}
                       />
                     </div>
 
                     <div className="admin-form-group">
-                      <label>Nombre del Remitente:</label>
-                      <input 
-                        type="text" 
-                        placeholder="Lezcom SpA" 
+                      <label>Nombre del Remitente por Defecto (Sender Name):</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: Gabriel Muñoz"
                         className="input-admin-text"
-                        value={senderName}
-                        onChange={(e) => setSenderName(e.target.value)}
+                        value={activeCompany.senderName || ""}
+                        onChange={(e) => updateActiveCompanyField("senderName", e.target.value)}
                       />
                     </div>
 
                     <div className="admin-form-group">
-                      <label>Correo Electrónico Autorizado:</label>
-                      <input 
-                        type="email" 
-                        placeholder="info@lezcom.cl" 
+                      <label>Correo Electrónico Autorizado (Sender Email):</label>
+                      <input
+                        type="email"
+                        placeholder="Ej: info@lezcom.cl"
                         className="input-admin-text"
-                        value={senderEmail}
-                        onChange={(e) => setSenderEmail(e.target.value)}
+                        value={activeCompany.senderEmail || ""}
+                        onChange={(e) => updateActiveCompanyField("senderEmail", e.target.value)}
                       />
                       <span style={{ fontSize: "0.75rem", color: "#f59e0b", marginTop: "5px", display: "block", lineHeight: "1.4" }}>
-                        ⚠️ <strong>IMPORTANTE:</strong> Este correo remitente debe estar previamente registrado y activado como remitente autorizado (Sender) dentro de tu cuenta de Brevo (sección <em>Senders & IPs</em>), de lo contrario Brevo rechazará todos los envíos con estado <strong>Fallido</strong>.
+                        ⚠️ <strong>IMPORTANTE:</strong> Este remitente debe estar previamente verificado en tu cuenta de Brevo.
                       </span>
                     </div>
 
                     <div className="admin-form-group">
-                      <label>URL del Webhook de n8n (Google Sheets Fetch):</label>
-                      <input 
-                        type="text" 
-                        placeholder="https://n8n.santisoft.cl/webhook/..." 
+                      <label>Teléfono de la Empresa (Firma):</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: +56 9 1234 5678"
+                        className="input-admin-text"
+                        value={activeCompany.telefono || ""}
+                        onChange={(e) => updateActiveCompanyField("telefono", e.target.value)}
+                      />
+                    </div>
+
+                    <div className="admin-form-group">
+                      <label>Sitio Web de la Empresa (Firma):</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: www.lezcom.cl"
+                        className="input-admin-text"
+                        value={activeCompany.web || ""}
+                        onChange={(e) => updateActiveCompanyField("web", e.target.value)}
+                      />
+                    </div>
+
+                    <div className="admin-form-group">
+                      <label>Dirección de la Empresa (Firma):</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: Av. Las Condes 1234, Santiago"
+                        className="input-admin-text"
+                        value={activeCompany.direccion || ""}
+                        onChange={(e) => updateActiveCompanyField("direccion", e.target.value)}
+                      />
+                    </div>
+
+                    <div className="admin-form-group" style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                      <label>URL del Webhook de n8n (Global - Google Sheets Fetch):</label>
+                      <input
+                        type="text"
+                        placeholder="https://n8n.santisoft.cl/webhook/..."
                         className="input-admin-text"
                         value={n8nWebhookUrl}
                         onChange={(e) => setN8nWebhookUrl(e.target.value)}
@@ -2715,7 +3314,7 @@ export default function AdminPage() {
                     </div>
 
                     <button type="submit" className="btn-admin btn-admin-primary" style={{ marginTop: "12px", width: "100%", justifyContent: "center" }}>
-                      💾 Guardar Configuraciones de Envío
+                      💾 Guardar Configuración de la Empresa
                     </button>
                   </form>
                 </div>
@@ -2726,9 +3325,9 @@ export default function AdminPage() {
                   <form onSubmit={handleSaveFirebaseSettings}>
                     <div className="admin-form-group">
                       <label>API Key:</label>
-                      <input 
-                        type="text" 
-                        placeholder="AIzaSy..." 
+                      <input
+                        type="text"
+                        placeholder="AIzaSy..."
                         className="input-admin-text"
                         value={firebaseConfig.apiKey}
                         onChange={(e) => setFirebaseConfig(prev => ({ ...prev, apiKey: e.target.value }))}
@@ -2738,9 +3337,9 @@ export default function AdminPage() {
 
                     <div className="admin-form-group">
                       <label>Project ID (ID del Proyecto):</label>
-                      <input 
-                        type="text" 
-                        placeholder="lezcom-db" 
+                      <input
+                        type="text"
+                        placeholder="lezcom-db"
                         className="input-admin-text"
                         value={firebaseConfig.projectId}
                         onChange={(e) => setFirebaseConfig(prev => ({ ...prev, projectId: e.target.value }))}
@@ -2750,9 +3349,9 @@ export default function AdminPage() {
 
                     <div className="admin-form-group">
                       <label>Auth Domain:</label>
-                      <input 
-                        type="text" 
-                        placeholder="lezcom-db.firebaseapp.com" 
+                      <input
+                        type="text"
+                        placeholder="lezcom-db.firebaseapp.com"
                         className="input-admin-text"
                         value={firebaseConfig.authDomain}
                         onChange={(e) => setFirebaseConfig(prev => ({ ...prev, authDomain: e.target.value }))}
@@ -2761,9 +3360,9 @@ export default function AdminPage() {
 
                     <div className="admin-form-group">
                       <label>Storage Bucket:</label>
-                      <input 
-                        type="text" 
-                        placeholder="lezcom-db.appspot.com" 
+                      <input
+                        type="text"
+                        placeholder="lezcom-db.appspot.com"
                         className="input-admin-text"
                         value={firebaseConfig.storageBucket}
                         onChange={(e) => setFirebaseConfig(prev => ({ ...prev, storageBucket: e.target.value }))}
@@ -2772,9 +3371,9 @@ export default function AdminPage() {
 
                     <div className="admin-form-group">
                       <label>Messaging Sender ID:</label>
-                      <input 
-                        type="text" 
-                        placeholder="3829104829" 
+                      <input
+                        type="text"
+                        placeholder="3829104829"
                         className="input-admin-text"
                         value={firebaseConfig.messagingSenderId}
                         onChange={(e) => setFirebaseConfig(prev => ({ ...prev, messagingSenderId: e.target.value }))}
@@ -2783,9 +3382,9 @@ export default function AdminPage() {
 
                     <div className="admin-form-group">
                       <label>App ID:</label>
-                      <input 
-                        type="text" 
-                        placeholder="1:3829104829:web:a1b2c3d4..." 
+                      <input
+                        type="text"
+                        placeholder="1:3829104829:web:a1b2c3d4..."
                         className="input-admin-text"
                         value={firebaseConfig.appId}
                         onChange={(e) => setFirebaseConfig(prev => ({ ...prev, appId: e.target.value }))}
@@ -2805,14 +3404,14 @@ export default function AdminPage() {
                   <h3 style={{ marginBottom: "16px", fontSize: "1.1rem" }}>Acciones Rápidas de Sincronización</h3>
                   <div className="actions-row">
                     <div className="button-group">
-                      <button 
+                      <button
                         className="btn-admin btn-admin-primary"
                         onClick={handleSyncWithN8n}
                         disabled={isSyncing || !n8nWebhookUrl}
                       >
                         {isSyncing ? "⏳ Sincronizando..." : "🔄 Sincronizar Google Sheets (n8n)"}
                       </button>
-                      <button 
+                      <button
                         className="btn-admin"
                         onClick={() => setShowCSVModal(true)}
                       >
@@ -2821,7 +3420,7 @@ export default function AdminPage() {
                     </div>
 
                     <div className="button-group">
-                      <button 
+                      <button
                         className="btn-admin btn-admin-success"
                         onClick={handleTestBrevoConnection}
                         disabled={isTestingBrevo || !brevoApiKey}
@@ -2912,17 +3511,17 @@ export default function AdminPage() {
               </p>
             </div>
 
-            <div 
+            <div
               className="drag-drop-zone"
               onClick={() => fileInputRef.current?.click()}
             >
               <span className="drag-drop-icon">📊</span>
               <span className="drag-drop-text">Haz clic aquí para seleccionar tu archivo Excel</span>
               <span className="drag-drop-subtext">Soporta formato .xlsx o .xls con múltiples pestañas</span>
-              <input 
-                type="file" 
+              <input
+                type="file"
                 ref={fileInputRef}
-                accept=".xlsx, .xls" 
+                accept=".xlsx, .xls"
                 style={{ display: "none" }}
                 onChange={handleExcelUpload}
               />
@@ -2948,8 +3547,8 @@ export default function AdminPage() {
               <div style={{ maxHeight: "350px", overflowY: "auto", paddingRight: "8px" }}>
                 <div className="admin-form-group">
                   <label>Razón Social (Empresa):</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     className="input-admin-text"
                     value={editingContact.RazonSocial}
                     onChange={(e) => setEditingContact({ ...editingContact, RazonSocial: e.target.value })}
@@ -2959,8 +3558,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>Representante (Contacto):</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     className="input-admin-text"
                     value={editingContact.Representante}
                     onChange={(e) => setEditingContact({ ...editingContact, Representante: e.target.value })}
@@ -2969,8 +3568,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>Cargo del Representante:</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     className="input-admin-text"
                     value={editingContact.CargoContacto || ""}
                     onChange={(e) => setEditingContact({ ...editingContact, CargoContacto: e.target.value })}
@@ -2979,8 +3578,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>Celular del Contacto:</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     className="input-admin-text"
                     value={editingContact.CelularContacto || ""}
                     onChange={(e) => setEditingContact({ ...editingContact, CelularContacto: e.target.value })}
@@ -2989,8 +3588,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>Teléfono de Contacto:</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     className="input-admin-text"
                     value={editingContact.TelefonoContacto || ""}
                     onChange={(e) => setEditingContact({ ...editingContact, TelefonoContacto: e.target.value })}
@@ -3000,8 +3599,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>EMAIL:</label>
-                  <input 
-                    type="email" 
+                  <input
+                    type="email"
                     className="input-admin-text"
                     value={editingContact.EMAIL}
                     onChange={(e) => setEditingContact({ ...editingContact, EMAIL: e.target.value })}
@@ -3011,8 +3610,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>Rubro (Emparejador de Plantilla):</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     className="input-admin-text"
                     value={editingContact.Rubro}
                     onChange={(e) => setEditingContact({ ...editingContact, Rubro: e.target.value })}
@@ -3021,7 +3620,7 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>Pitch Personalizado:</label>
-                  <textarea 
+                  <textarea
                     className="input-admin-text"
                     rows={4}
                     style={{ fontFamily: "inherit", resize: "vertical" }}
@@ -3055,20 +3654,20 @@ export default function AdminPage() {
               {deleteConfirm.type === "all" ? "Purga Completa de Clientes" : "Eliminar Cliente"}
             </h2>
             <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)", marginBottom: "24px", lineHeight: "1.5" }}>
-              {deleteConfirm.type === "all" 
+              {deleteConfirm.type === "all"
                 ? "¿Estás seguro de que deseas eliminar de forma permanente a TODOS los clientes de la base de datos Firestore? Esta acción es irreversible."
                 : "¿Estás seguro de que deseas eliminar permanentemente a este cliente de la base de datos Firestore?"
               }
             </p>
             <div className="button-group" style={{ justifyContent: "center", gap: "12px" }}>
-              <button 
-                className="btn-admin" 
+              <button
+                className="btn-admin"
                 onClick={() => setDeleteConfirm(null)}
               >
                 Cancelar
               </button>
-              <button 
-                className="btn-admin btn-admin-danger" 
+              <button
+                className="btn-admin btn-admin-danger"
                 onClick={async () => {
                   const type = deleteConfirm.type;
                   const cid = deleteConfirm.contactId;
@@ -3097,14 +3696,14 @@ export default function AdminPage() {
               <h2 style={{ fontSize: "1.3rem", fontWeight: "800", color: "#ffffff", margin: 0 }}>
                 🔍 Bitácora de Envío
               </h2>
-              <button 
-                onClick={() => setSelectedTrackingDetail(null)} 
-                style={{ 
-                  background: "transparent", 
-                  border: "none", 
-                  color: "var(--text-secondary)", 
-                  fontSize: "1.5rem", 
-                  cursor: "pointer" 
+              <button
+                onClick={() => setSelectedTrackingDetail(null)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--text-secondary)",
+                  fontSize: "1.5rem",
+                  cursor: "pointer"
                 }}
               >
                 ×
@@ -3133,7 +3732,7 @@ export default function AdminPage() {
                 <div style={{ backgroundColor: "rgba(255,255,255,0.02)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.05)" }}>
                   <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", textTransform: "uppercase", fontWeight: "bold" }}>Último Intento</div>
                   <div style={{ fontSize: "0.85rem", color: "#ffffff" }}>
-                    {selectedTrackingDetail.tracking?.ultimoEnvio 
+                    {selectedTrackingDetail.tracking?.ultimoEnvio
                       ? new Date(selectedTrackingDetail.tracking.ultimoEnvio.seconds ? selectedTrackingDetail.tracking.ultimoEnvio.seconds * 1000 : selectedTrackingDetail.tracking.ultimoEnvio).toLocaleString()
                       : "Nunca intentado"
                     }
@@ -3169,13 +3768,13 @@ export default function AdminPage() {
               {selectedTrackingDetail.tracking?.estadoEnvio === "fallido" && (
                 <div style={{ backgroundColor: "rgba(239,68,68,0.05)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(239,68,68,0.15)" }}>
                   <div style={{ fontSize: "0.75rem", color: "#f87171", textTransform: "uppercase", fontWeight: "bold", marginBottom: "6px" }}>Detalle del Error</div>
-                  <pre style={{ 
-                    fontSize: "0.75rem", 
-                    color: "#fca5a5", 
-                    backgroundColor: "rgba(0,0,0,0.3)", 
-                    padding: "10px", 
-                    borderRadius: "6px", 
-                    whiteSpace: "pre-wrap", 
+                  <pre style={{
+                    fontSize: "0.75rem",
+                    color: "#fca5a5",
+                    backgroundColor: "rgba(0,0,0,0.3)",
+                    padding: "10px",
+                    borderRadius: "6px",
+                    whiteSpace: "pre-wrap",
                     wordBreak: "break-all",
                     fontFamily: "monospace",
                     margin: 0
@@ -3187,8 +3786,8 @@ export default function AdminPage() {
             </div>
 
             <div style={{ marginTop: "24px", display: "flex", justifyContent: "flex-end" }}>
-              <button 
-                className="btn-admin" 
+              <button
+                className="btn-admin"
                 onClick={() => setSelectedTrackingDetail(null)}
               >
                 Cerrar
@@ -3233,15 +3832,15 @@ export default function AdminPage() {
                 <span style={{ color: "#3b82f6", fontWeight: "bold" }}>{campaignProgress.toFixed(0)}%</span>
               </div>
               <div style={{ height: "10px", width: "100%", backgroundColor: "rgba(255,255,255,0.05)", borderRadius: "999px", overflow: "hidden", border: "1px solid rgba(255,255,255,0.05)" }}>
-                <div style={{ 
-                  height: "100%", 
-                  width: `${campaignProgress}%`, 
-                  backgroundColor: "#3b82f6", 
-                  borderRadius: "999px", 
-                  transition: "width 0.3s ease", 
-                  backgroundImage: "linear-gradient(45deg, rgba(255,255,255,0.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.15) 75%, transparent 75%, transparent)", 
-                  backgroundSize: "1rem 1rem", 
-                  animation: "progress-bar-stripes 1s linear infinite" 
+                <div style={{
+                  height: "100%",
+                  width: `${campaignProgress}%`,
+                  backgroundColor: "#3b82f6",
+                  borderRadius: "999px",
+                  transition: "width 0.3s ease",
+                  backgroundImage: "linear-gradient(45deg, rgba(255,255,255,0.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.15) 75%, transparent 75%, transparent)",
+                  backgroundSize: "1rem 1rem",
+                  animation: "progress-bar-stripes 1s linear infinite"
                 }}></div>
               </div>
             </div>
@@ -3276,8 +3875,8 @@ export default function AdminPage() {
 
             {/* Botón de Cancelación / Detener */}
             <div style={{ display: "flex", justifyContent: "center" }}>
-              <button 
-                className="btn-admin btn-admin-danger" 
+              <button
+                className="btn-admin btn-admin-danger"
                 onClick={handleStopCampaign}
                 style={{ width: "100%", justifyContent: "center", padding: "11px", fontSize: "0.9rem" }}
               >
@@ -3300,21 +3899,21 @@ export default function AdminPage() {
               {campaignConfirm.type === "send" ? "Iniciar Envío Masivo" : "Restablecer Estados de Envío"}
             </h2>
             <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)", marginBottom: "24px", lineHeight: "1.5" }}>
-              {campaignConfirm.type === "send" 
+              {campaignConfirm.type === "send"
                 ? `¿Estás seguro de iniciar la campaña masiva para los ${campaignConfirm.selectedCount} contactos seleccionados? Se realizarán envíos automáticos secuenciales a través de Brevo.`
                 : `¿Estás seguro de restablecer el estado de envío a 'Pendiente' para los ${campaignConfirm.selectedCount} contactos seleccionados? Sus contadores de intentos se reiniciarán a cero.`
               }
             </p>
             <div className="button-group" style={{ justifyContent: "center", gap: "12px" }}>
-              <button 
-                className="btn-admin" 
+              <button
+                className="btn-admin"
                 onClick={() => setCampaignConfirm(null)}
               >
                 Cancelar
               </button>
-              <button 
-                className="btn-admin btn-admin-primary" 
-                style={{ 
+              <button
+                className="btn-admin btn-admin-primary"
+                style={{
                   backgroundColor: campaignConfirm.type === "send" ? "var(--accent-color)" : "#dc2626",
                   color: "#ffffff"
                 }}
@@ -3348,12 +3947,12 @@ export default function AdminPage() {
             }
           `}</style>
           <div className="modal-content" style={{ maxWidth: "450px", textAlign: "center", border: "1px solid rgba(255,255,255,0.1)", padding: "30px 24px" }}>
-            <div style={{ 
-              width: "50px", 
-              height: "50px", 
-              border: "4px solid rgba(255,255,255,0.08)", 
-              borderTopColor: "#3b82f6", 
-              borderRadius: "50%", 
+            <div style={{
+              width: "50px",
+              height: "50px",
+              border: "4px solid rgba(255,255,255,0.08)",
+              borderTopColor: "#3b82f6",
+              borderRadius: "50%",
               margin: "0 auto 20px auto",
               animation: "spin 1s linear infinite"
             }}></div>
@@ -3363,7 +3962,7 @@ export default function AdminPage() {
             <p style={{ fontSize: "0.85rem", color: "#60a5fa", fontWeight: "600", marginBottom: "20px" }}>
               {importProgress.phase}
             </p>
-            
+
             {importProgress.total > 0 && (
               <div style={{ marginTop: "16px", padding: "0 8px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "var(--text-secondary)", marginBottom: "6px" }}>
@@ -3371,16 +3970,16 @@ export default function AdminPage() {
                   <span>{importProgress.current} de {importProgress.total}</span>
                 </div>
                 <div style={{ width: "100%", height: "8px", backgroundColor: "rgba(255,255,255,0.05)", borderRadius: "999px", overflow: "hidden" }}>
-                  <div style={{ 
-                    width: `${(importProgress.current / importProgress.total) * 100}%`, 
-                    height: "100%", 
-                    backgroundColor: "#3b82f6", 
-                    transition: "width 0.15s ease-out" 
+                  <div style={{
+                    width: `${(importProgress.current / importProgress.total) * 100}%`,
+                    height: "100%",
+                    backgroundColor: "#3b82f6",
+                    transition: "width 0.15s ease-out"
                   }} />
                 </div>
               </div>
             )}
-            
+
             <p style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "20px", lineHeight: "1.4" }}>
               Por favor, no cierres esta ventana. Los registros se están sincronizando de forma segura en Firebase Firestore.
             </p>
@@ -3405,8 +4004,8 @@ export default function AdminPage() {
             <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)", marginBottom: "24px", lineHeight: "1.5" }}>
               {notification.message}
             </p>
-            <button 
-              className="btn-admin btn-admin-primary" 
+            <button
+              className="btn-admin btn-admin-primary"
               style={{ width: "100%", justifyContent: "center" }}
               onClick={() => {
                 const title = notification.title;
@@ -3427,19 +4026,19 @@ export default function AdminPage() {
           ============================================== */}
       {showNewTemplateModal && (
         <div className="modal-overlay" style={{ zIndex: 999, padding: "20px" }}>
-          <div className="modal-content" style={{ 
-            maxWidth: "98%", 
-            width: "1800px", 
-            height: "92vh", 
-            display: "flex", 
-            flexDirection: "column", 
+          <div className="modal-content" style={{
+            maxWidth: "98%",
+            width: "1800px",
+            height: "92vh",
+            display: "flex",
+            flexDirection: "column",
             border: "1px solid rgba(255,255,255,0.1)",
             padding: "24px"
           }}>
             <div className="modal-header" style={{ marginBottom: "16px", flexShrink: 0 }}>
               <h2>{editingTemplateId ? "📝 Editar Plantilla de Correo HTML" : "➕ Crear Nueva Plantilla de Correo HTML"}</h2>
               <button className="modal-close" onClick={() => {
-              setShowNewTemplateModal(false);
+                setShowNewTemplateModal(false);
                 setEditingTemplateId(null);
                 setAiReviewResult(null);
               }}>×</button>
@@ -3449,7 +4048,7 @@ export default function AdminPage() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1.1fr", gap: "24px", flex: 1, minHeight: 0, marginBottom: "16px" }}>
               {/* Lado izquierdo: Inputs y Textarea */}
               <div style={{ display: "flex", flexDirection: "column", gap: "16px", minHeight: 0 }}>
-                
+
                 {/* Selector de Rubro y Previsualización de Clientes */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", flexShrink: 0 }}>
                   <div className="admin-form-group" style={{ margin: 0 }}>
@@ -3485,7 +4084,7 @@ export default function AdminPage() {
                     </div>
 
                     {rubroSelectionType === "new" && (
-                      <input 
+                      <input
                         type="text"
                         placeholder="Escribe el nombre del NUEVO Rubro..."
                         className="input-admin-text"
@@ -3530,7 +4129,7 @@ export default function AdminPage() {
                     <label style={{ color: "var(--text-secondary)", fontWeight: "600", fontSize: "0.85rem" }}>
                       👤 Nombre del Ejecutivo Comercial:
                     </label>
-                    <input 
+                    <input
                       type="text"
                       placeholder="Ej: Gabriel Muñoz"
                       className="input-admin-text"
@@ -3545,7 +4144,7 @@ export default function AdminPage() {
                     <label style={{ color: "var(--text-secondary)", fontWeight: "600", fontSize: "0.85rem" }}>
                       📞 Teléfono del Ejecutivo:
                     </label>
-                    <input 
+                    <input
                       type="text"
                       placeholder="Ej: +56 9 1234 5678"
                       className="input-admin-text"
@@ -3572,11 +4171,11 @@ export default function AdminPage() {
                       <button
                         type="button"
                         className="btn-admin btn-admin-primary"
-                        style={{ 
-                          padding: "5px 14px", 
-                          fontSize: "0.75rem", 
-                          display: "flex", 
-                          alignItems: "center", 
+                        style={{
+                          padding: "5px 14px",
+                          fontSize: "0.75rem",
+                          display: "flex",
+                          alignItems: "center",
                           gap: "6px",
                           background: isImprovingTemplate ? "rgba(99,102,241,0.3)" : "linear-gradient(135deg, #6366f1, #8b5cf6)",
                           border: "1px solid rgba(139,92,246,0.4)",
@@ -3624,15 +4223,15 @@ export default function AdminPage() {
                     </div>
                   </div>
 
-                  <textarea 
+                  <textarea
                     id="new-template-html-textarea"
                     className="input-admin-text"
-                    style={{ 
-                      fontFamily: "Consolas, Monaco, monospace", 
-                      fontSize: "0.8rem", 
+                    style={{
+                      fontFamily: "Consolas, Monaco, monospace",
+                      fontSize: "0.8rem",
                       lineHeight: "1.4",
-                      flex: 1, 
-                      resize: "none", 
+                      flex: 1,
+                      resize: "none",
                       backgroundColor: "#030712",
                       color: "#34d399",
                       border: "1px solid rgba(255,255,255,0.08)",
@@ -3653,7 +4252,7 @@ export default function AdminPage() {
                 <div style={{ backgroundColor: "#111827", padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.08)", fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "700", flexShrink: 0 }}>
                   👁️ Previsualización del Correo en Tiempo Real
                 </div>
-                <iframe 
+                <iframe
                   style={{ flex: 1, width: "100%", border: "none", backgroundColor: "#ffffff" }}
                   title="Realtime Sandbox Preview"
                   srcDoc={modalPreviewHtml || "<div style='padding:40px;color:#94a3b8;font-family:sans-serif;text-align:center;'>Escribe código HTML en el editor de la izquierda para comenzar a previsualizar...</div>"}
@@ -3668,7 +4267,7 @@ export default function AdminPage() {
               }}>
                 Cancelar
               </button>
-              <button 
+              <button
                 className="btn-admin btn-admin-success"
                 onClick={handleCreateNewTemplate}
               >
@@ -3684,8 +4283,8 @@ export default function AdminPage() {
           ============================================== */}
       {aiReviewResult && (
         <div className="modal-overlay" style={{ zIndex: 1200, padding: "20px" }}>
-          <div className="modal-content" style={{ 
-            maxWidth: "780px", 
+          <div className="modal-content" style={{
+            maxWidth: "780px",
             width: "95%",
             maxHeight: "90vh",
             overflowY: "auto",
@@ -3702,7 +4301,7 @@ export default function AdminPage() {
                   Análisis de entregabilidad para evitar Spam y Promociones
                 </p>
               </div>
-              <button 
+              <button
                 onClick={() => setAiReviewResult(null)}
                 style={{ background: "transparent", border: "none", color: "var(--text-secondary)", fontSize: "1.5rem", cursor: "pointer", lineHeight: 1 }}
               >
@@ -3721,10 +4320,10 @@ export default function AdminPage() {
               gap: "16px",
               marginBottom: "20px"
             }}>
-              <div style={{ 
-                fontSize: "2.5rem", 
-                fontWeight: "900", 
-                color: aiReviewResult.puntuacion_total >= 75 ? "#10b981" : aiReviewResult.puntuacion_total >= 50 ? "#f59e0b" : "#ef4444" 
+              <div style={{
+                fontSize: "2.5rem",
+                fontWeight: "900",
+                color: aiReviewResult.puntuacion_total >= 75 ? "#10b981" : aiReviewResult.puntuacion_total >= 50 ? "#f59e0b" : "#ef4444"
               }}>
                 {aiReviewResult.puntuacion_total}
               </div>
@@ -3747,9 +4346,9 @@ export default function AdminPage() {
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                       <div style={{ width: "60px", height: "6px", backgroundColor: "rgba(255,255,255,0.06)", borderRadius: "3px", overflow: "hidden" }}>
-                        <div style={{ 
-                          width: `${(score as number) * 10}%`, 
-                          height: "100%", 
+                        <div style={{
+                          width: `${(score as number) * 10}%`,
+                          height: "100%",
                           backgroundColor: (score as number) >= 8 ? "#10b981" : (score as number) >= 5 ? "#f59e0b" : "#ef4444",
                           borderRadius: "3px",
                           transition: "width 0.5s ease"
@@ -3812,6 +4411,102 @@ export default function AdminPage() {
 
 
       {/* ==============================================
+          MODAL: DUPLICAR PLANTILLA A OTRA EMPRESA
+          ============================================== */}
+      {showDuplicateTemplateModal && templateToDuplicate && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }}>
+          <div className="modal-content" style={{ maxWidth: "450px", border: "1px solid rgba(255,255,255,0.1)" }}>
+            <div className="modal-header">
+              <h2>👯 Duplicar Plantilla</h2>
+              <button className="modal-close" onClick={() => setShowDuplicateTemplateModal(false)}>×</button>
+            </div>
+
+            <form onSubmit={handleDuplicateTemplate}>
+              <div style={{ marginBottom: "16px" }}>
+                <span style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                  Plantilla a copiar: <strong>{templateToDuplicate.Rubro}</strong>
+                </span>
+              </div>
+
+              <div className="admin-form-group" style={{ marginBottom: "20px" }}>
+                <label>Seleccionar Empresa Destino:</label>
+                <select
+                  value={duplicateTemplateTargetCompanyId}
+                  onChange={(e) => setDuplicateTemplateTargetCompanyId(e.target.value)}
+                  className="input-admin-text"
+                  required
+                >
+                  {companies
+                    .filter(c => c.id !== (templateToDuplicate.companyId || "default_lezcom"))
+                    .map(c => (
+                      <option key={c.id} value={c.id} style={{ backgroundColor: "#1e1e2e" }}>
+                        {c.nombreEmpresa}
+                      </option>
+                    ))}
+                  {companies.filter(c => c.id !== (templateToDuplicate.companyId || "default_lezcom")).length === 0 && (
+                    <option value="" disabled>No hay otras empresas registradas</option>
+                  )}
+                </select>
+              </div>
+
+              <div className="modal-footer" style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+                <button type="button" className="btn-admin" onClick={() => setShowDuplicateTemplateModal(false)}>
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="btn-admin btn-admin-primary"
+                  disabled={companies.filter(c => c.id !== (templateToDuplicate.companyId || "default_lezcom")).length === 0}
+                >
+                  Duplicar Plantilla
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+
+      {/* ==============================================
+          MODAL: CREACIÓN DE PERFIL DE EMPRESA
+          ============================================== */}
+      {showNewCompanyModal && (
+        <div className="modal-overlay" style={{ zIndex: 999 }}>
+          <div className="modal-content" style={{ maxWidth: "450px", border: "1px solid rgba(255,255,255,0.1)" }}>
+            <div className="modal-header">
+              <h2>➕ Crear Nueva Empresa</h2>
+              <button className="modal-close" onClick={() => setShowNewCompanyModal(false)}>×</button>
+            </div>
+
+            <form onSubmit={submitCreateCompany}>
+              <div className="admin-form-group" style={{ marginBottom: "20px" }}>
+                <label>Nombre de la Empresa / Cuenta:</label>
+                <input
+                  type="text"
+                  placeholder="Ej: SantiSoft SpA"
+                  className="input-admin-text"
+                  value={newCompanyNameInput}
+                  onChange={(e) => setNewCompanyNameInput(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <div className="modal-footer" style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+                <button type="button" className="btn-admin" onClick={() => setShowNewCompanyModal(false)}>
+                  Cancelar
+                </button>
+                <button type="submit" className="btn-admin btn-admin-primary">
+                  Crear Empresa
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+
+      {/* ==============================================
           MODAL: CREACIÓN MANUAL DE CLIENTES
           ============================================== */}
       {showNewClientModal && (
@@ -3826,8 +4521,8 @@ export default function AdminPage() {
               <div style={{ maxHeight: "400px", overflowY: "auto", paddingRight: "8px" }}>
                 <div className="admin-form-group">
                   <label>Razón Social (Empresa):</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     placeholder="Empresa de Ejemplo SpA"
                     className="input-admin-text"
                     value={newClientData.RazonSocial}
@@ -3838,8 +4533,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>RUT de la Empresa:</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     placeholder="77.123.456-K"
                     className="input-admin-text"
                     value={newClientData.Rut}
@@ -3849,8 +4544,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>EMAIL de Contacto:</label>
-                  <input 
-                    type="email" 
+                  <input
+                    type="email"
                     placeholder="ejemplo@correo.com"
                     className="input-admin-text"
                     value={newClientData.EMAIL}
@@ -3861,8 +4556,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>Representante (Contacto):</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     placeholder="Nombre del Representante"
                     className="input-admin-text"
                     value={newClientData.Representante}
@@ -3872,8 +4567,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>Cargo del Representante:</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     placeholder="Gerente, Socio, KAM..."
                     className="input-admin-text"
                     value={newClientData.CargoContacto || ""}
@@ -3883,8 +4578,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>Celular de Contacto:</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     placeholder="56-9-12345678"
                     className="input-admin-text"
                     value={newClientData.CelularContacto || ""}
@@ -3894,8 +4589,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>Teléfono de Contacto:</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     placeholder="56-2-2123456"
                     className="input-admin-text"
                     value={newClientData.TelefonoContacto || ""}
@@ -3917,8 +4612,8 @@ export default function AdminPage() {
                       <option key={rubro} value={rubro}>{rubro}</option>
                     ))}
                   </select>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     placeholder="O escribe un nuevo Rubro aquí..."
                     className="input-admin-text"
                     style={{ marginTop: "10px" }}
@@ -3929,7 +4624,7 @@ export default function AdminPage() {
 
                 <div className="admin-form-group">
                   <label>Pitch Personalizado:</label>
-                  <textarea 
+                  <textarea
                     placeholder="Escribe un párrafo personalizado para este cliente..."
                     className="input-admin-text"
                     rows={4}
@@ -3958,12 +4653,12 @@ export default function AdminPage() {
           ============================================== */}
       {showBlogEditorModal && (
         <div className="modal-overlay" style={{ zIndex: 1100, padding: "20px" }}>
-          <div className="modal-content" style={{ 
-            maxWidth: "1200px", 
-            width: "95%", 
-            maxHeight: "90vh", 
-            display: "flex", 
-            flexDirection: "column", 
+          <div className="modal-content" style={{
+            maxWidth: "1200px",
+            width: "95%",
+            maxHeight: "90vh",
+            display: "flex",
+            flexDirection: "column",
             padding: "24px",
             border: "1px solid rgba(255,255,255,0.1)",
             overflow: "hidden"
@@ -3973,8 +4668,8 @@ export default function AdminPage() {
               <h2 style={{ fontSize: "1.3rem", fontWeight: "800", color: "#ffffff", margin: 0 }}>
                 {selectedBlog ? "📝 Editar Artículo del Blog" : "✨ Revisar y Crear Artículo Generado"}
               </h2>
-              <button 
-                className="modal-close" 
+              <button
+                className="modal-close"
                 onClick={() => setShowBlogEditorModal(false)}
                 style={{ fontSize: "1.8rem", color: "var(--text-secondary)", background: "transparent", border: "none", cursor: "pointer" }}
               >
@@ -3984,15 +4679,15 @@ export default function AdminPage() {
 
             {/* Contenido principal en dos columnas (Formulario a la izq, Previsualización a la der) */}
             <form onSubmit={handleSaveBlog} style={{ display: "flex", flex: 1, gap: "24px", minHeight: 0 }}>
-              
+
               {/* Columna Izquierda: Formulario de Edición */}
               <div style={{ flex: 1.2, display: "flex", flexDirection: "column", gap: "12px", overflowY: "auto", paddingRight: "8px" }}>
-                
+
                 <div className="admin-form-group" style={{ margin: 0 }}>
                   <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>Título del Artículo:</label>
-                  <input 
-                    type="text" 
-                    className="input-admin-text" 
+                  <input
+                    type="text"
+                    className="input-admin-text"
                     value={blogFormTitle}
                     onChange={(e) => {
                       setBlogFormTitle(e.target.value);
@@ -4008,9 +4703,9 @@ export default function AdminPage() {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
                   <div className="admin-form-group" style={{ margin: 0 }}>
                     <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>Ruta / Slug URL:</label>
-                    <input 
-                      type="text" 
-                      className="input-admin-text" 
+                    <input
+                      type="text"
+                      className="input-admin-text"
                       value={blogFormSlug}
                       onChange={(e) => setBlogFormSlug(e.target.value.toLowerCase().trim().replace(/\s+/g, '-'))}
                       required
@@ -4020,9 +4715,9 @@ export default function AdminPage() {
 
                   <div className="admin-form-group" style={{ margin: 0 }}>
                     <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>Tiempo Lectura:</label>
-                    <input 
-                      type="text" 
-                      className="input-admin-text" 
+                    <input
+                      type="text"
+                      className="input-admin-text"
                       value={blogFormLeido}
                       onChange={(e) => setBlogFormLeido(e.target.value)}
                       required
@@ -4032,9 +4727,9 @@ export default function AdminPage() {
 
                 <div className="admin-form-group" style={{ margin: 0 }}>
                   <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>URL Imagen de Cabecera:</label>
-                  <input 
-                    type="text" 
-                    className="input-admin-text" 
+                  <input
+                    type="text"
+                    className="input-admin-text"
                     value={blogFormImage}
                     onChange={(e) => setBlogFormImage(e.target.value)}
                     required
@@ -4043,8 +4738,8 @@ export default function AdminPage() {
 
                 <div className="admin-form-group" style={{ margin: 0 }}>
                   <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>Resumen Corto (Meta Descripción SEO):</label>
-                  <textarea 
-                    className="input-admin-text" 
+                  <textarea
+                    className="input-admin-text"
                     rows={2}
                     value={blogFormResumen}
                     onChange={(e) => setBlogFormResumen(e.target.value)}
@@ -4055,9 +4750,9 @@ export default function AdminPage() {
 
                 <div className="admin-form-group" style={{ margin: 0 }}>
                   <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>Palabras Clave SEO (separadas por comas):</label>
-                  <input 
-                    type="text" 
-                    className="input-admin-text" 
+                  <input
+                    type="text"
+                    className="input-admin-text"
                     value={blogFormKeywords}
                     onChange={(e) => setBlogFormKeywords(e.target.value)}
                     required
@@ -4066,14 +4761,14 @@ export default function AdminPage() {
 
                 <div className="admin-form-group" style={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px", margin: 0, minHeight: "200px" }}>
                   <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "600" }}>Contenido HTML del Artículo:</label>
-                  <textarea 
-                    className="input-admin-text" 
-                    style={{ 
-                      flex: 1, 
-                      fontFamily: "monospace", 
-                      fontSize: "0.8rem", 
-                      lineHeight: "1.4", 
-                      backgroundColor: "#0f172a", 
+                  <textarea
+                    className="input-admin-text"
+                    style={{
+                      flex: 1,
+                      fontFamily: "monospace",
+                      fontSize: "0.8rem",
+                      lineHeight: "1.4",
+                      backgroundColor: "#0f172a",
                       color: "#94a3b8",
                       border: "1px solid rgba(255,255,255,0.08)",
                       borderRadius: "8px",
@@ -4088,8 +4783,8 @@ export default function AdminPage() {
 
                 {/* Switch de Publicación */}
                 <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "4px" }}>
-                  <input 
-                    type="checkbox" 
+                  <input
+                    type="checkbox"
                     id="blogFormPublicado"
                     checked={blogFormPublicado}
                     onChange={(e) => setBlogFormPublicado(e.target.checked)}
@@ -4117,14 +4812,14 @@ export default function AdminPage() {
                 <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: "700", textTransform: "uppercase", marginBottom: "12px", display: "block" }}>
                   👀 Previsualización del Artículo:
                 </span>
-                
+
                 {/* Contenedor del Preview simulando el post real */}
-                <div style={{ 
-                  flex: 1, 
-                  overflowY: "auto", 
-                  backgroundColor: "#ffffff", 
-                  color: "#334155", 
-                  borderRadius: "12px", 
+                <div style={{
+                  flex: 1,
+                  overflowY: "auto",
+                  backgroundColor: "#ffffff",
+                  color: "#334155",
+                  borderRadius: "12px",
                   padding: "24px",
                   border: "1px solid rgba(0,0,0,0.1)",
                   fontFamily: "system-ui, -apple-system, sans-serif"
@@ -4152,11 +4847,11 @@ export default function AdminPage() {
                   )}
 
                   {/* Cuerpo del Artículo (HTML) */}
-                  <div 
+                  <div
                     className="blog-rich-content"
-                    dangerouslySetInnerHTML={{ __html: blogFormContent }} 
-                    style={{ 
-                      fontSize: "0.95rem", 
+                    dangerouslySetInnerHTML={{ __html: blogFormContent }}
+                    style={{
+                      fontSize: "0.95rem",
                       lineHeight: "1.7",
                       color: "#334155"
                     }}
