@@ -2377,11 +2377,27 @@ export default function AdminPage() {
                                       {log.status === "exito" ? "✔ Éxito" : "✘ Error"}
                                     </span>
                                   </td>
-                                  <td style={{ fontSize: "0.75rem", color: log.status === "exito" ? "#a7f3d0" : "#fca5a5", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    {log.status === "exito"
-                                      ? (log.mensajeId ? `ID: ${log.mensajeId}` : "Enviado OK")
-                                      : (log.error || "Error desconocido")
-                                    }
+                                  <td style={{ fontSize: "0.75rem", color: log.status === "exito" ? "#a7f3d0" : "#fca5a5", maxWidth: "200px" }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={log.status === "exito" ? (log.mensajeId ? `ID: ${log.mensajeId}` : "Enviado OK") : (log.error || "Error desconocido")}>
+                                        {log.status === "exito"
+                                          ? (log.mensajeId ? `ID: ${log.mensajeId}` : "Enviado OK")
+                                          : (log.error || "Error desconocido")
+                                        }
+                                      </span>
+                                      {log.status === "error" && log.error && (
+                                        <button
+                                          onClick={() => {
+                                            navigator.clipboard.writeText(log.error || "");
+                                            showNotificationModal("Copiado", "Error copiado al portapapeles", "info");
+                                          }}
+                                          title="Copiar error"
+                                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.85rem", color: "#fca5a5", padding: "0 2px" }}
+                                        >
+                                          📋
+                                        </button>
+                                      )}
+                                    </div>
                                   </td>
                                 </tr>
                               );
