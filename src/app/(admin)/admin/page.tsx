@@ -639,6 +639,75 @@ export default function AdminPage() {
     }
   };
 
+  // Seleccionar clientes de un rubro para envío de correos
+  const handleSelectRubroForEmail = (rubroNombre: string) => {
+    const matchingContacts = contacts.filter(c => 
+      c.Rubro.toLowerCase().trim() === rubroNombre.toLowerCase().trim()
+    );
+    
+    const newSelected: Record<string, boolean> = {};
+    matchingContacts.forEach(c => {
+      newSelected[c.id] = true;
+    });
+    setSelectedContacts(newSelected);
+    setSearchTerm(rubroNombre);
+    setActiveTab("contacts");
+    
+    showNotificationModal(
+      "Clientes Seleccionados", 
+      `Se han seleccionado ${matchingContacts.length} clientes del rubro "${rubroNombre}" listos para enviar correos.`,
+      "success"
+    );
+  };
+
+  // Crear o editar plantilla directamente desde el listado de rubros
+  const handleCreateTemplateFromRubro = (rubroNombre: string) => {
+    const targetCompId = selectedCompanyId || "default_lezcom";
+    const existingTemplate = templates.find(t => 
+      t.Rubro.toLowerCase().trim() === rubroNombre.toLowerCase().trim() && 
+      (t.companyId || "default_lezcom") === targetCompId
+    );
+
+    if (existingTemplate) {
+      setEditingTemplateId(existingTemplate.id);
+      setNewTemplateRubro(existingTemplate.Rubro);
+      setNewTemplateHtml(existingTemplate.Template);
+      setNewTemplateEjecutivo(existingTemplate.Ejecutivo || "Gabriel Muñoz");
+      setNewTemplateTelefono(existingTemplate.TelefonoEjecutivo || "+56 9 1234 5678");
+      if (existingTemplate.companyId) {
+        setSelectedCompanyIdForTemplates(existingTemplate.companyId);
+      }
+    } else {
+      setEditingTemplateId(null);
+      setNewTemplateRubro(rubroNombre);
+      setNewTemplateHtml(`<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #334155; padding: 20px; line-height: 1.5; background-color: #f8fafc; }
+    .card { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; max-width: 600px; margin: 0 auto; }
+    h1 { color: #1e3a8a; font-size: 1.5rem; margin-top: 0; }
+    p { margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Hola {{Representante}} de {{RazonSocial}}</h1>
+    <p>Le escribimos porque vimos que su empresa se especializa en el rubro de <strong>{{Rubro}}</strong>.</p>
+    <p>{{Pitch_Personalizado}}</p>
+  </div>
+</body>
+</html>`);
+      setNewTemplateEjecutivo("Gabriel Muñoz");
+      setNewTemplateTelefono("+56 9 1234 5678");
+      setSelectedCompanyIdForTemplates(targetCompId);
+    }
+    
+    setEditorPreviewContactId("");
+    setActiveTab("templates");
+    setShowNewTemplateModal(true);
+  };
+
   // Abrir modal de nuevo o editar rubro
   const handleOpenRubroModal = (item?: RubroItem) => {
     if (item) {
@@ -947,7 +1016,9 @@ export default function AdminPage() {
     }
 
     try {
-      const docId = editingTemplateId || rubroVal.toLowerCase().trim().replace(/[^a-z0-9]/g, "_");
+      const activeCompany = selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom";
+      const baseRubroId = rubroVal.toLowerCase().trim().replace(/[^a-z0-9]/g, "_");
+      const docId = editingTemplateId || `${baseRubroId}_${activeCompany}`;
       const docRef = doc(db, "templates", docId);
 
       const newTempObj = {
@@ -956,7 +1027,7 @@ export default function AdminPage() {
         Ejecutivo: newTemplateEjecutivo,
         TelefonoEjecutivo: newTemplateTelefono,
         ultimoSync: new Date(),
-        companyId: selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom"
+        companyId: activeCompany
       };
 
       await setDoc(docRef, newTempObj, { merge: true });
@@ -2998,8 +3069,9 @@ export default function AdminPage() {
                     </thead>
                     <tbody>
                       {filteredRubros.map((item) => {
+                        const currentCompany = selectedCompanyId || "default_lezcom";
                         const hasTemplate = templates.some(
-                          (t) => t.Rubro.toLowerCase().trim() === item.nombre.toLowerCase().trim()
+                          (t) => t.Rubro.toLowerCase().trim() === item.nombre.toLowerCase().trim() && (t.companyId || "default_lezcom") === currentCompany
                         );
                         return (
                           <tr key={item.id}>
@@ -3047,7 +3119,7 @@ export default function AdminPage() {
                               </div>
                             </td>
                             <td>
-                              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                              <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
                                 <button
                                   className="btn-admin"
                                   style={{ padding: "6px 10px", fontSize: "0.8rem" }}
@@ -3057,15 +3129,31 @@ export default function AdminPage() {
                                   }}
                                   title="Ver todos los clientes de este rubro"
                                 >
-                                  👥 Clientes
+                                  👥 Ver
+                                </button>
+                                <button
+                                  className="btn-admin"
+                                  style={{ padding: "6px 10px", fontSize: "0.8rem" }}
+                                  onClick={() => handleCreateTemplateFromRubro(item.nombre)}
+                                  title="Crear o editar plantilla de correo"
+                                >
+                                  📄 {hasTemplate ? "Editar Plantilla" : "Añadir Plantilla"}
+                                </button>
+                                <button
+                                  className="btn-admin btn-admin-primary"
+                                  style={{ padding: "6px 10px", fontSize: "0.8rem" }}
+                                  onClick={() => handleSelectRubroForEmail(item.nombre)}
+                                  title="Seleccionar clientes y preparar envío"
+                                >
+                                  🚀 Enviar Correo
                                 </button>
                                 <button
                                   className="btn-admin"
                                   style={{ padding: "6px 10px", fontSize: "0.8rem" }}
                                   onClick={() => handleOpenRubroModal(item)}
-                                  title="Editar Rubro"
+                                  title="Editar nombre de rubro"
                                 >
-                                  ✏️ Editar
+                                  ✏️ Rubro
                                 </button>
                                 <button
                                   className="btn-admin btn-admin-danger"
