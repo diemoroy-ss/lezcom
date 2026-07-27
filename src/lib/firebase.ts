@@ -1,5 +1,5 @@
 import { initializeApp, getApps, deleteApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore, initializeFirestore } from "firebase/firestore";
 
 export interface FirebaseConfig {
   apiKey: string;
@@ -75,7 +75,14 @@ export function getDb() {
   const app = getFirebaseApp();
   if (!app) return null;
   try {
-    return getFirestore(app);
+    try {
+      return initializeFirestore(app, {
+        experimentalAutoDetectLongPolling: true
+      });
+    } catch (e) {
+      // If already initialized, get it
+      return getFirestore(app);
+    }
   } catch (error) {
     console.error("Error al obtener Firestore:", error);
     return null;
