@@ -110,12 +110,34 @@ interface FirestoreLog {
   status: "exito" | "error";
   mensajeId: string | null;
   error: string | null;
+  companyId?: string;
+}
+
+export interface RubroItem {
+  id: string;
+  nombre: string;
+  descripcion?: string;
+  plantillaAsociada?: string;
+  cantidadClientes?: number;
+  fechaCreacion?: any;
 }
 
 export default function AdminPage() {
   // Pestaña Activa
-  const [activeTab, setActiveTab] = useState<"dashboard" | "contacts" | "templates" | "settings" | "blogs">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "contacts" | "rubros" | "templates" | "settings" | "blogs">("dashboard");
   const [settingsSubTab, setSettingsSubTab] = useState<"credentials" | "sync">("credentials");
+
+  // Estados de Rubros CRUD
+  const [rubros, setRubros] = useState<RubroItem[]>([]);
+  const [isLoadingRubros, setIsLoadingRubros] = useState(false);
+  const [rubroSearchTerm, setRubroSearchTerm] = useState("");
+  const [showRubroModal, setShowRubroModal] = useState(false);
+  const [editingRubro, setEditingRubro] = useState<RubroItem | null>(null);
+
+  // Formulario de Rubro
+  const [rubroFormNombre, setRubroFormNombre] = useState("");
+  const [rubroFormDescripcion, setRubroFormDescripcion] = useState("");
+  const [rubroFormPlantilla, setRubroFormPlantilla] = useState("");
 
   // Estados del Blog IA
   const [blogs, setBlogs] = useState<BlogPost[]>([]);
@@ -401,6 +423,18 @@ export default function AdminPage() {
       });
       setTemplates(templatesList);
 
+      // Cargar rubros
+      try {
+        const rubrosSnap = await getDocs(collection(db, "rubros"));
+        const rubrosList: RubroItem[] = [];
+        rubrosSnap.forEach((docSnap) => {
+          rubrosList.push({ id: docSnap.id, ...docSnap.data() } as RubroItem);
+        });
+        setRubros(rubrosList);
+      } catch (err) {
+        console.warn("No se pudieron cargar rubros de Firestore:", err);
+      }
+
       // Cargar empresas
       let companiesList: CompanyConfig[] = [];
       try {
@@ -504,11 +538,183 @@ export default function AdminPage() {
   // Función para actualizar campos de la empresa seleccionada
   const updateActiveCompanyField = (field: keyof CompanyConfig, value: string) => {
     setCompanies(prev => prev.map(c => {
-      if (c.id === selectedCompanyId) {
+      if (c.id === (selectedCompanyId || "default_lezcom")) {
         return { ...c, [field]: value };
       }
       return c;
     }));
+  };
+
+  // ==============================================
+  // GESTIÓN DE RUBROS (CRUD & SINCRONIZACIÓN)
+  // ==============================================
+
+  // Obtener rubros combinando la colección 'rubros' con los contactos cargados
+  const getCombinedRubros = (): RubroItem[] => {
+    const countsMap: { [key: string]: number } = {};
+    contacts.forEach((c) => {
+      if (c.Rubro) {
+        const key = c.Rubro.trim();
+        countsMap[key] = (countsMap[key] || 0) + 1;
+      }
+    });
+
+    const registeredNames = new Set(rubros.map((r) => r.nombre.toLowerCase().trim()));
+    const combined: RubroItem[] = [...rubros.map((r) => ({
+      ...r,
+      cantidadClientes: countsMap[r.nombre.trim()] || 0,
+    }))];
+
+    Object.keys(countsMap).forEach((rName) => {
+      if (rName && !registeredNames.has(rName.toLowerCase().trim())) {
+        combined.push({
+          id: `auto_${rName.toLowerCase().replace(/[^a-z0-9]/g, "_")}`,
+          nombre: rName,
+          descripcion: "Rubro detectado automáticamente desde la base de clientes",
+          cantidadClientes: countsMap[rName],
+        });
+      }
+    });
+
+    return combined.sort((a, b) => (b.cantidadClientes || 0) - (a.cantidadClientes || 0));
+  };
+
+  // Rubros filtrados por término de búsqueda
+  const filteredRubros = getCombinedRubros().filter((r) => {
+    const term = rubroSearchTerm.toLowerCase().trim();
+    if (!term) return true;
+    return (
+      r.nombre.toLowerCase().includes(term) ||
+      (r.descripcion && r.descripcion.toLowerCase().includes(term)) ||
+      (r.plantillaAsociada && r.plantillaAsociada.toLowerCase().includes(term))
+    );
+  });
+
+  // Sincronizar masivamente todos los rubros desde los contactos hacia la colección 'rubros' en Firestore
+  const handleSyncRubrosToFirestore = async () => {
+    const db = getDb();
+    if (!db || !firebaseActive) {
+      showNotificationModal("Error", "La conexión a Firebase no está activa.", "error");
+      return;
+    }
+    setIsLoadingRubros(true);
+    addLog("Iniciando sincronización de Rubros en Firestore...", "info");
+    try {
+      const combined = getCombinedRubros();
+      let syncCount = 0;
+
+      for (const item of combined) {
+        const cleanId = item.nombre.toLowerCase().trim().replace(/[^a-z0-9]/g, "_");
+        const docRef = doc(db, "rubros", cleanId);
+        await setDoc(
+          docRef,
+          {
+            nombre: item.nombre,
+            descripcion: item.descripcion || "Importado automáticamente desde base de clientes",
+            plantillaAsociada: item.plantillaAsociada || "",
+            fechaCreacion: item.fechaCreacion || serverTimestamp(),
+          },
+          { merge: true }
+        );
+        syncCount++;
+      }
+
+      // Recargar rubros de Firestore
+      const rubrosSnap = await getDocs(collection(db, "rubros"));
+      const updatedList: RubroItem[] = [];
+      rubrosSnap.forEach((d) => updatedList.push({ id: d.id, ...d.data() } as RubroItem));
+      setRubros(updatedList);
+
+      addLog(`Sincronización completada: ${syncCount} rubros registrados en Firestore.`, "success");
+      showNotificationModal(
+        "Sincronización Exitosa 🎉",
+        `Se procesaron y guardaron ${syncCount} rubros en la base de datos de Firestore.`,
+        "success"
+      );
+    } catch (err: any) {
+      addLog(`Error al sincronizar rubros: ${err.message}`, "error");
+      showNotificationModal("Error de Sincronización", err.message, "error");
+    } finally {
+      setIsLoadingRubros(false);
+    }
+  };
+
+  // Abrir modal de nuevo o editar rubro
+  const handleOpenRubroModal = (item?: RubroItem) => {
+    if (item) {
+      setEditingRubro(item);
+      setRubroFormNombre(item.nombre);
+      setRubroFormDescripcion(item.descripcion || "");
+      setRubroFormPlantilla(item.plantillaAsociada || "");
+    } else {
+      setEditingRubro(null);
+      setRubroFormNombre("");
+      setRubroFormDescripcion("");
+      setRubroFormPlantilla("");
+    }
+    setShowRubroModal(true);
+  };
+
+  // Guardar (Crear o Actualizar) Rubro en Firestore
+  const handleSaveRubro = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rubroFormNombre.trim()) {
+      showNotificationModal("Campo Requerido", "Por favor ingresa un nombre para el Rubro.", "error");
+      return;
+    }
+    const db = getDb();
+    if (!db || !firebaseActive) {
+      showNotificationModal("Error de Conexión", "La conexión a Firebase no está disponible.", "error");
+      return;
+    }
+
+    try {
+      const cleanId = editingRubro?.id?.startsWith("auto_")
+        ? rubroFormNombre.toLowerCase().trim().replace(/[^a-z0-9]/g, "_")
+        : (editingRubro ? editingRubro.id : rubroFormNombre.toLowerCase().trim().replace(/[^a-z0-9]/g, "_"));
+
+      const docRef = doc(db, "rubros", cleanId);
+      const rubroData = {
+        nombre: rubroFormNombre.trim(),
+        descripcion: rubroFormDescripcion.trim(),
+        plantillaAsociada: rubroFormPlantilla.trim(),
+        fechaCreacion: editingRubro?.fechaCreacion || serverTimestamp(),
+      };
+
+      await setDoc(docRef, rubroData, { merge: true });
+
+      // Recargar de Firestore
+      const rubrosSnap = await getDocs(collection(db, "rubros"));
+      const updatedList: RubroItem[] = [];
+      rubrosSnap.forEach((d) => updatedList.push({ id: d.id, ...d.data() } as RubroItem));
+      setRubros(updatedList);
+
+      setShowRubroModal(false);
+      addLog(`Rubro '${rubroFormNombre}' guardado exitosamente.`, "success");
+      showNotificationModal("Rubro Guardado 🎉", `El rubro "${rubroFormNombre}" fue registrado correctamente.`, "success");
+    } catch (err: any) {
+      addLog(`Error al guardar rubro: ${err.message}`, "error");
+      showNotificationModal("Error al Guardar", err.message, "error");
+    }
+  };
+
+  // Eliminar Rubro
+  const handleDeleteRubro = async (rubroItem: RubroItem) => {
+    if (!window.confirm(`¿Estás seguro de que deseas eliminar el rubro "${rubroItem.nombre}"?`)) return;
+    const db = getDb();
+    if (!db || !firebaseActive) return;
+
+    try {
+      if (!rubroItem.id.startsWith("auto_")) {
+        await deleteDoc(doc(db, "rubros", rubroItem.id));
+      }
+      setRubros((prev) => prev.filter((r) => r.id !== rubroItem.id));
+      addLog(`Rubro '${rubroItem.nombre}' eliminado.`, "info");
+      showNotificationModal("Rubro Eliminado", `El rubro "${rubroItem.nombre}" ha sido eliminado.`, "info");
+    } catch (err: any) {
+      addLog(`Error al eliminar rubro: ${err.message}`, "error");
+      showNotificationModal("Error al Eliminar", err.message, "error");
+    }
   };
 
   // Abrir modal de creación de empresa
@@ -1767,7 +1973,8 @@ export default function AdminPage() {
             fecha: new Date(),
             status: "exito",
             mensajeId: res.messageId,
-            error: null
+            error: null,
+            companyId: activeCompany.id
           });
         }
 
@@ -1800,7 +2007,8 @@ export default function AdminPage() {
             fecha: new Date(),
             status: "error",
             mensajeId: null,
-            error: err.message
+            error: err.message,
+            companyId: activeCompany.id
           });
         }
 
@@ -2107,6 +2315,12 @@ export default function AdminPage() {
             👥 Clientes ({contacts.length})
           </button>
           <button
+            className={`nav-item ${activeTab === "rubros" ? "active" : ""}`}
+            onClick={() => setActiveTab("rubros")}
+          >
+            🏷️ Rubros ({getCombinedRubros().length})
+          </button>
+          <button
             className={`nav-item ${activeTab === "templates" ? "active" : ""}`}
             onClick={() => setActiveTab("templates")}
           >
@@ -2140,6 +2354,7 @@ export default function AdminPage() {
             <h1>
               {activeTab === "dashboard" && "Cuadro de Mando"}
               {activeTab === "contacts" && "Base de Clientes"}
+              {activeTab === "rubros" && "Gestión de Rubros Económicos"}
               {activeTab === "templates" && "Plantillas de Correo"}
               {activeTab === "blogs" && "Artículos del Blog IA"}
               {activeTab === "settings" && "Configuración General"}
@@ -2147,6 +2362,7 @@ export default function AdminPage() {
             <p>
               {activeTab === "dashboard" && "Métricas globales y consola de control rápido."}
               {activeTab === "contacts" && "Gestión de destinatarios e histórico de entregas."}
+              {activeTab === "rubros" && "Catálogo de rubros, asignación de plantillas de email y distribución de clientes por sector."}
               {activeTab === "templates" && "Previsualización y emparejamiento por Rubro."}
               {activeTab === "blogs" && "Genera automáticamente artículos de alta calidad optimizados para SEO usando Inteligencia Artificial."}
               {activeTab === "settings" && "Gestionar API de Brevo, webhooks y conexión a Firebase."}
@@ -2172,7 +2388,7 @@ export default function AdminPage() {
                     backgroundColor: "rgba(255, 255, 255, 0.05)",
                     border: "1px solid rgba(255, 255, 255, 0.15)",
                     borderRadius: "6px",
-                    color: "#ffffff",
+                    color: "var(--text-primary)",
                     fontSize: "0.8rem",
                     fontWeight: "600",
                     padding: "3px 8px",
@@ -2182,7 +2398,7 @@ export default function AdminPage() {
                   }}
                 >
                   {companies.map(c => (
-                    <option key={c.id} value={c.id} style={{ backgroundColor: "#1e1e2e", color: "#ffffff" }}>
+                    <option key={c.id} value={c.id} style={{ backgroundColor: "var(--admin-bg)", color: "var(--text-primary)" }}>
                       {c.nombreEmpresa}
                     </option>
                   ))}
@@ -2211,25 +2427,35 @@ export default function AdminPage() {
             VISTA: DASHBOARD
             ============================================== */}
         {activeTab === "dashboard" && (
-          <>
-            {/* GRILLA METRICAS */}
-            <div className="stats-grid">
-              <div className="glass-card stat-card blue">
-                <div className="stat-card-header">
-                  <span>CLIENTES</span>
-                  <div className="stat-icon-wrapper">👥</div>
-                </div>
-                <div className="stat-number">{contacts.length}</div>
-                <div className="stat-desc">Clientes totales en base de datos.</div>
-              </div>
+          <div className="animate-fade-in">
+            {(() => {
+              const currentTemplates = templates.filter(t => (t.companyId || "default_lezcom") === selectedCompanyId);
+              const validRubros = new Set(currentTemplates.map(t => t.Rubro));
+              const currentLogs = historicalLogs.filter(l => 
+                (l.companyId === selectedCompanyId) || 
+                (!l.companyId && (selectedCompanyId === "default_lezcom" || validRubros.has(l.areaTemplate)))
+              );
+
+              return (
+                <>
+                  {/* GRILLA METRICAS */}
+                  <div className="stats-grid">
+                    <div className="glass-card stat-card blue">
+                      <div className="stat-card-header">
+                        <span>CLIENTES</span>
+                        <div className="stat-icon-wrapper">👥</div>
+                      </div>
+                      <div className="stat-number">{contacts.length}</div>
+                      <div className="stat-desc">Clientes totales en base de datos.</div>
+                    </div>
 
               <div className="glass-card stat-card purple">
                 <div className="stat-card-header">
                   <span>PLANTILLAS</span>
                   <div className="stat-icon-wrapper">📄</div>
                 </div>
-                <div className="stat-number">{templates.length}</div>
-                <div className="stat-desc">Areas con correo HTML asignado.</div>
+                <div className="stat-number">{currentTemplates.length}</div>
+                <div className="stat-desc">Áreas con correo HTML de la empresa.</div>
               </div>
 
               <div
@@ -2245,7 +2471,7 @@ export default function AdminPage() {
                   <div className="stat-icon-wrapper">✔️</div>
                 </div>
                 <div className="stat-number">
-                  {historicalLogs.filter(l => l.status === "exito").length}
+                  {currentLogs.filter(l => l.status === "exito").length}
                 </div>
                 <div className="stat-desc">Total histórico de correos entregados. <span style={{ textDecoration: "underline", fontSize: "0.7rem" }}>{showLogsModal?.filter === "exito" ? "Ocultar ↑" : "Ver detalle →"}</span></div>
               </div>
@@ -2263,7 +2489,7 @@ export default function AdminPage() {
                   <div className="stat-icon-wrapper">❌</div>
                 </div>
                 <div className="stat-number">
-                  {historicalLogs.filter(l => l.status === "error").length}
+                  {currentLogs.filter(l => l.status === "error").length}
                 </div>
                 <div className="stat-desc">Total histórico de errores de envío. <span style={{ textDecoration: "underline", fontSize: "0.7rem" }}>{showLogsModal?.filter === "error" ? "Ocultar ↑" : "Ver detalle →"}</span></div>
               </div>
@@ -2275,7 +2501,7 @@ export default function AdminPage() {
                 {/* Header */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
                   <div>
-                    <h3 style={{ fontSize: "1.15rem", fontWeight: "800", color: "#ffffff", margin: "0 0 4px" }}>
+                    <h3 style={{ fontSize: "1.15rem", fontWeight: "800", color: "var(--text-primary)", margin: "0 0 4px" }}>
                       {showLogsModal.filter === "exito" ? "✔️ Historial de Envíos Exitosos" : showLogsModal.filter === "error" ? "❌ Historial de Envíos Fallidos" : "📋 Historial Completo de Envíos"}
                     </h3>
                     <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", margin: 0 }}>
@@ -2298,21 +2524,21 @@ export default function AdminPage() {
                     style={{ padding: "6px 14px", fontSize: "0.8rem" }}
                     onClick={() => setShowLogsModal({ show: true, filter: "all" })}
                   >
-                    📋 Todos ({historicalLogs.length})
+                    📋 Todos ({currentLogs.length})
                   </button>
                   <button
                     className={`btn-admin ${showLogsModal.filter === "exito" ? "btn-admin-success" : ""}`}
                     style={{ padding: "6px 14px", fontSize: "0.8rem" }}
                     onClick={() => setShowLogsModal({ show: true, filter: "exito" })}
                   >
-                    ✔️ Exitosos ({historicalLogs.filter(l => l.status === "exito").length})
+                    ✔️ Exitosos ({currentLogs.filter(l => l.status === "exito").length})
                   </button>
                   <button
                     className={`btn-admin ${showLogsModal.filter === "error" ? "btn-admin-danger" : ""}`}
                     style={{ padding: "6px 14px", fontSize: "0.8rem" }}
                     onClick={() => setShowLogsModal({ show: true, filter: "error" })}
                   >
-                    ❌ Fallidos ({historicalLogs.filter(l => l.status === "error").length})
+                    ❌ Fallidos ({currentLogs.filter(l => l.status === "error").length})
                   </button>
                 </div>
 
@@ -2320,8 +2546,8 @@ export default function AdminPage() {
                 <div style={{ maxHeight: "450px", overflowY: "auto" }}>
                   {(() => {
                     const filtered = showLogsModal.filter === "all"
-                      ? historicalLogs
-                      : historicalLogs.filter(l => l.status === showLogsModal.filter);
+                      ? currentLogs
+                      : currentLogs.filter(l => l.status === showLogsModal.filter);
 
                     if (filtered.length === 0) {
                       return (
@@ -2410,7 +2636,10 @@ export default function AdminPage() {
                 </div>
               </div>
             )}
-          </>
+                </>
+              );
+            })()}
+          </div>
         )}
 
 
@@ -2656,6 +2885,209 @@ export default function AdminPage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ==============================================
+            VISTA: RUBROS (CRUD & METRICAS)
+            ============================================== */}
+        {activeTab === "rubros" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            {/* Métricas / Resumen de Rubros */}
+            <div className="stats-grid">
+              <div className="stat-card blue">
+                <div className="stat-header">
+                  <span className="stat-title">Total de Rubros</span>
+                  <span className="stat-icon">🏷️</span>
+                </div>
+                <div className="stat-value">{getCombinedRubros().length}</div>
+                <div className="stat-desc">Sectores económicos detectados</div>
+              </div>
+
+              <div className="stat-card green">
+                <div className="stat-header">
+                  <span className="stat-title">Con Plantilla Vinculada</span>
+                  <span className="stat-icon">✅</span>
+                </div>
+                <div className="stat-value">
+                  {getCombinedRubros().filter(r => templates.some(t => t.Rubro.toLowerCase().trim() === r.nombre.toLowerCase().trim())).length}
+                </div>
+                <div className="stat-desc">Listos para envíos masivos</div>
+              </div>
+
+              <div className="stat-card orange">
+                <div className="stat-header">
+                  <span className="stat-title">Sin Plantilla</span>
+                  <span className="stat-icon">⚠️</span>
+                </div>
+                <div className="stat-value">
+                  {getCombinedRubros().filter(r => !templates.some(t => t.Rubro.toLowerCase().trim() === r.nombre.toLowerCase().trim())).length}
+                </div>
+                <div className="stat-desc">Requieren plantilla de correo</div>
+              </div>
+
+              <div className="stat-card purple">
+                <div className="stat-header">
+                  <span className="stat-title">Rubro Principal</span>
+                  <span className="stat-icon">🏆</span>
+                </div>
+                <div className="stat-value" style={{ fontSize: "1.1rem", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
+                  {getCombinedRubros()[0]?.nombre || "Sin Datos"}
+                </div>
+                <div className="stat-desc">
+                  {getCombinedRubros()[0] ? `${getCombinedRubros()[0].cantidadClientes} clientes` : "N/A"}
+                </div>
+              </div>
+            </div>
+
+            {/* Barra de Acciones y Búsqueda */}
+            <div className="glass-card">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: "12px", alignItems: "center", flex: 1, minWidth: "280px" }}>
+                  <div className="admin-search-input" style={{ width: "100%", maxWidth: "400px" }}>
+                    <span className="search-icon">🔍</span>
+                    <input
+                      type="text"
+                      placeholder="Buscar rubro por nombre o descripción..."
+                      value={rubroSearchTerm}
+                      onChange={(e) => setRubroSearchTerm(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                  <button
+                    className="btn-admin btn-admin-secondary"
+                    onClick={handleSyncRubrosToFirestore}
+                    disabled={isLoadingRubros}
+                    title="Analiza todos los clientes cargados y registra sus rubros en Firestore"
+                  >
+                    {isLoadingRubros ? "🔄 Sincronizando..." : "🔄 Sincronizar de BD"}
+                  </button>
+                  <button
+                    className="btn-admin btn-admin-primary"
+                    onClick={() => handleOpenRubroModal()}
+                  >
+                    ➕ Nuevo Rubro
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Tabla de Rubros */}
+            <div className="glass-card">
+              <h3 style={{ fontSize: "1.1rem", marginBottom: "16px" }}>
+                Catálogo de Rubros Económicos ({filteredRubros.length})
+              </h3>
+
+              {filteredRubros.length === 0 ? (
+                <div className="admin-empty-state">
+                  <p>No se encontraron rubros con los filtros aplicados.</p>
+                </div>
+              ) : (
+                <div className="table-container">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>Rubro</th>
+                        <th>Clientes Registrados</th>
+                        <th>Plantilla de Email</th>
+                        <th>Descripción / Origen</th>
+                        <th>Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredRubros.map((item) => {
+                        const hasTemplate = templates.some(
+                          (t) => t.Rubro.toLowerCase().trim() === item.nombre.toLowerCase().trim()
+                        );
+                        return (
+                          <tr key={item.id}>
+                            <td>
+                              <div style={{ fontWeight: "700", color: "var(--text-primary)", fontSize: "0.95rem" }}>
+                                {item.nombre}
+                              </div>
+                              <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                                ID: {item.id}
+                              </span>
+                            </td>
+                            <td>
+                              <span
+                                className="status-badge"
+                                style={{
+                                  background: "rgba(59, 130, 246, 0.15)",
+                                  color: "#60a5fa",
+                                  border: "1px solid rgba(59, 130, 246, 0.3)",
+                                  fontWeight: "700",
+                                }}
+                              >
+                                👥 {item.cantidadClientes || 0} clientes
+                              </span>
+                            </td>
+                            <td>
+                              {hasTemplate ? (
+                                <span
+                                  className="status-badge status-enviado"
+                                  style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
+                                >
+                                  ✅ Plantilla Vinculada
+                                </span>
+                              ) : (
+                                <span
+                                  className="status-badge status-fallido"
+                                  style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
+                                >
+                                  ⚠️ Sin Plantilla
+                                </span>
+                              )}
+                            </td>
+                            <td>
+                              <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)", maxWidth: "350px" }}>
+                                {item.descripcion || "Sin descripción asignada."}
+                              </div>
+                            </td>
+                            <td>
+                              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                                <button
+                                  className="btn-admin"
+                                  style={{ padding: "6px 10px", fontSize: "0.8rem" }}
+                                  onClick={() => {
+                                    setRubroFilter(item.nombre);
+                                    setActiveTab("contacts");
+                                  }}
+                                  title="Ver todos los clientes de este rubro"
+                                >
+                                  👥 Clientes
+                                </button>
+                                <button
+                                  className="btn-admin"
+                                  style={{ padding: "6px 10px", fontSize: "0.8rem" }}
+                                  onClick={() => handleOpenRubroModal(item)}
+                                  title="Editar Rubro"
+                                >
+                                  ✏️ Editar
+                                </button>
+                                <button
+                                  className="btn-admin btn-admin-danger"
+                                  style={{ padding: "6px 10px", fontSize: "0.8rem" }}
+                                  onClick={() => handleDeleteRubro(item)}
+                                  title="Eliminar Rubro"
+                                >
+                                  🗑️
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <div className="table-footer">
+                    <span>Mostrando {filteredRubros.length} de {getCombinedRubros().length} rubros</span>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -3011,7 +3443,7 @@ export default function AdminPage() {
                           </span>
                           <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Clic para programar ➔</span>
                         </div>
-                        <div style={{ fontSize: "0.85rem", fontWeight: "700", color: "#ffffff", marginBottom: "4px" }}>
+                        <div style={{ fontSize: "0.85rem", fontWeight: "700", color: "var(--text-primary)", marginBottom: "4px" }}>
                           {item.titulo}
                         </div>
                         <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginBottom: "6px" }}>
@@ -3096,7 +3528,7 @@ export default function AdminPage() {
                           fontSize: "0.75rem",
                           fontWeight: "bold",
                           background: blog.publicado ? "rgba(16, 185, 129, 0.9)" : "rgba(100, 116, 139, 0.9)",
-                          color: "#ffffff"
+                          color: "var(--text-primary)"
                         }}>
                           {blog.publicado ? "🟢 Publicado" : "⚪ Borrador"}
                         </span>
@@ -3110,7 +3542,7 @@ export default function AdminPage() {
                             <span>⏱️ {blog.leido}</span>
                           </div>
 
-                          <h4 style={{ fontSize: "1rem", fontWeight: "700", color: "#ffffff", marginBottom: "8px", lineHeight: "1.4", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                          <h4 style={{ fontSize: "1rem", fontWeight: "700", color: "var(--text-primary)", marginBottom: "8px", lineHeight: "1.4", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
                             {blog.titulo}
                           </h4>
 
@@ -3211,7 +3643,7 @@ export default function AdminPage() {
                         style={{ height: "40px", cursor: "pointer" }}
                       >
                         {companies.map(c => (
-                          <option key={c.id} value={c.id} style={{ backgroundColor: "#1e1e2e" }}>
+                          <option key={c.id} value={c.id} style={{ backgroundColor: "var(--admin-bg)" }}>
                             {c.nombreEmpresa}
                           </option>
                         ))}
@@ -3666,7 +4098,7 @@ export default function AdminPage() {
         <div className="modal-overlay" style={{ zIndex: 1001 }}>
           <div className="modal-content" style={{ maxWidth: "420px", textAlign: "center", border: "1px solid rgba(255,255,255,0.1)" }}>
             <div style={{ fontSize: "3.5rem", marginBottom: "16px" }}>⚠️</div>
-            <h2 style={{ fontSize: "1.3rem", fontWeight: "800", marginBottom: "12px", color: "#ffffff" }}>
+            <h2 style={{ fontSize: "1.3rem", fontWeight: "800", marginBottom: "12px", color: "var(--text-primary)" }}>
               {deleteConfirm.type === "all" ? "Purga Completa de Clientes" : "Eliminar Cliente"}
             </h2>
             <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)", marginBottom: "24px", lineHeight: "1.5" }}>
@@ -3709,7 +4141,7 @@ export default function AdminPage() {
         <div className="modal-overlay" style={{ zIndex: 1050 }}>
           <div className="modal-content" style={{ maxWidth: "550px", border: "1px solid rgba(255,255,255,0.1)", padding: "30px 24px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-              <h2 style={{ fontSize: "1.3rem", fontWeight: "800", color: "#ffffff", margin: 0 }}>
+              <h2 style={{ fontSize: "1.3rem", fontWeight: "800", color: "var(--text-primary)", margin: 0 }}>
                 🔍 Bitácora de Envío
               </h2>
               <button
@@ -3729,25 +4161,25 @@ export default function AdminPage() {
             <div style={{ display: "flex", flexDirection: "column", gap: "16px", textAlign: "left" }}>
               <div style={{ backgroundColor: "rgba(255,255,255,0.02)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.05)" }}>
                 <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", textTransform: "uppercase", fontWeight: "bold" }}>Cliente</div>
-                <div style={{ fontSize: "1.05rem", fontWeight: "bold", color: "#ffffff" }}>{selectedTrackingDetail.RazonSocial || "S/R"}</div>
+                <div style={{ fontSize: "1.05rem", fontWeight: "bold", color: "var(--text-primary)" }}>{selectedTrackingDetail.RazonSocial || "S/R"}</div>
                 <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "2px" }}>RUT: {selectedTrackingDetail.Rut || "Sin RUT"}</div>
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
                 <div style={{ backgroundColor: "rgba(255,255,255,0.02)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.05)" }}>
                   <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", textTransform: "uppercase", fontWeight: "bold" }}>Correo de Contacto</div>
-                  <div style={{ fontSize: "0.9rem", color: "#ffffff", wordBreak: "break-all" }}>{selectedTrackingDetail.EMAIL}</div>
+                  <div style={{ fontSize: "0.9rem", color: "var(--text-primary)", wordBreak: "break-all" }}>{selectedTrackingDetail.EMAIL}</div>
                 </div>
                 <div style={{ backgroundColor: "rgba(255,255,255,0.02)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.05)" }}>
                   <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", textTransform: "uppercase", fontWeight: "bold" }}>Rubro</div>
-                  <div style={{ fontSize: "0.9rem", color: "#ffffff" }}>{selectedTrackingDetail.Rubro || "Sin Rubro"}</div>
+                  <div style={{ fontSize: "0.9rem", color: "var(--text-primary)" }}>{selectedTrackingDetail.Rubro || "Sin Rubro"}</div>
                 </div>
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
                 <div style={{ backgroundColor: "rgba(255,255,255,0.02)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.05)" }}>
                   <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", textTransform: "uppercase", fontWeight: "bold" }}>Último Intento</div>
-                  <div style={{ fontSize: "0.85rem", color: "#ffffff" }}>
+                  <div style={{ fontSize: "0.85rem", color: "var(--text-primary)" }}>
                     {selectedTrackingDetail.tracking?.ultimoEnvio
                       ? new Date(selectedTrackingDetail.tracking.ultimoEnvio.seconds ? selectedTrackingDetail.tracking.ultimoEnvio.seconds * 1000 : selectedTrackingDetail.tracking.ultimoEnvio).toLocaleString()
                       : "Nunca intentado"
@@ -3756,7 +4188,7 @@ export default function AdminPage() {
                 </div>
                 <div style={{ backgroundColor: "rgba(255,255,255,0.02)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.05)" }}>
                   <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", textTransform: "uppercase", fontWeight: "bold" }}>Intentos Realizados</div>
-                  <div style={{ fontSize: "0.85rem", color: "#ffffff" }}>
+                  <div style={{ fontSize: "0.85rem", color: "var(--text-primary)" }}>
                     {selectedTrackingDetail.tracking?.intentos || 0} de 3
                   </div>
                 </div>
@@ -3834,7 +4266,7 @@ export default function AdminPage() {
               </span>
             </div>
 
-            <h3 style={{ fontSize: "1.3rem", fontWeight: "800", color: "#ffffff", marginBottom: "6px" }}>
+            <h3 style={{ fontSize: "1.3rem", fontWeight: "800", color: "var(--text-primary)", marginBottom: "6px" }}>
               Enviando Campaña de Correos
             </h3>
             <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginBottom: "24px" }}>
@@ -3877,7 +4309,7 @@ export default function AdminPage() {
             <div style={{ backgroundColor: "rgba(255, 255, 255, 0.02)", border: "1px solid rgba(255, 255, 255, 0.05)", borderRadius: "10px", padding: "12px 16px", marginBottom: "24px", textAlign: "left" }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", color: "var(--text-secondary)", marginBottom: "4px" }}>
                 <span>Total Procesados:</span>
-                <span style={{ color: "#ffffff", fontWeight: "bold" }}>{campaignSentCount + campaignFailedCount} de {campaignTotal}</span>
+                <span style={{ color: "var(--text-primary)", fontWeight: "bold" }}>{campaignSentCount + campaignFailedCount} de {campaignTotal}</span>
               </div>
               {currentProcessingContact && (
                 <div style={{ borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "8px", marginTop: "8px" }}>
@@ -3911,7 +4343,7 @@ export default function AdminPage() {
             <div style={{ fontSize: "3.5rem", marginBottom: "16px" }}>
               {campaignConfirm.type === "send" ? "🚀" : "🔄"}
             </div>
-            <h2 style={{ fontSize: "1.3rem", fontWeight: "800", marginBottom: "12px", color: "#ffffff" }}>
+            <h2 style={{ fontSize: "1.3rem", fontWeight: "800", marginBottom: "12px", color: "var(--text-primary)" }}>
               {campaignConfirm.type === "send" ? "Iniciar Envío Masivo" : "Restablecer Estados de Envío"}
             </h2>
             <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)", marginBottom: "24px", lineHeight: "1.5" }}>
@@ -3931,7 +4363,7 @@ export default function AdminPage() {
                 className="btn-admin btn-admin-primary"
                 style={{
                   backgroundColor: campaignConfirm.type === "send" ? "var(--accent-color)" : "#dc2626",
-                  color: "#ffffff"
+                  color: "var(--text-primary)"
                 }}
                 onClick={async () => {
                   const type = campaignConfirm.type;
@@ -3972,7 +4404,7 @@ export default function AdminPage() {
               margin: "0 auto 20px auto",
               animation: "spin 1s linear infinite"
             }}></div>
-            <h2 style={{ fontSize: "1.3rem", fontWeight: "800", marginBottom: "8px", color: "#ffffff" }}>
+            <h2 style={{ fontSize: "1.3rem", fontWeight: "800", marginBottom: "8px", color: "var(--text-primary)" }}>
               Importando Planilla Excel
             </h2>
             <p style={{ fontSize: "0.85rem", color: "#60a5fa", fontWeight: "600", marginBottom: "20px" }}>
@@ -4014,7 +4446,7 @@ export default function AdminPage() {
             <div style={{ fontSize: "3.5rem", marginBottom: "16px" }}>
               {notification.type === "success" ? "🎉" : notification.type === "error" ? "❌" : "ℹ️"}
             </div>
-            <h2 style={{ fontSize: "1.3rem", fontWeight: "800", marginBottom: "12px", color: "#ffffff" }}>
+            <h2 style={{ fontSize: "1.3rem", fontWeight: "800", marginBottom: "12px", color: "var(--text-primary)" }}>
               {notification.title}
             </h2>
             <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)", marginBottom: "24px", lineHeight: "1.5" }}>
@@ -4310,7 +4742,7 @@ export default function AdminPage() {
             {/* Encabezado */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "20px" }}>
               <div>
-                <h2 style={{ fontSize: "1.3rem", fontWeight: "800", color: "#ffffff", margin: "0 0 4px" }}>
+                <h2 style={{ fontSize: "1.3rem", fontWeight: "800", color: "var(--text-primary)", margin: "0 0 4px" }}>
                   ✨ Revisión de IA — Gemini
                 </h2>
                 <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", margin: 0 }}>
@@ -4344,7 +4776,7 @@ export default function AdminPage() {
                 {aiReviewResult.puntuacion_total}
               </div>
               <div>
-                <div style={{ fontSize: "1rem", fontWeight: "700", color: "#ffffff" }}>
+                <div style={{ fontSize: "1rem", fontWeight: "700", color: "var(--text-primary)" }}>
                   {aiReviewResult.puntuacion_total >= 75 ? "🟢 Buena entregabilidad" : aiReviewResult.puntuacion_total >= 50 ? "🟡 Entregabilidad mejorable" : "🔴 Alta probabilidad de Spam/Promoción"}
                 </div>
                 <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Puntuación de entregabilidad sobre 100</div>
@@ -4455,7 +4887,7 @@ export default function AdminPage() {
                   {companies
                     .filter(c => c.id !== (templateToDuplicate.companyId || "default_lezcom"))
                     .map(c => (
-                      <option key={c.id} value={c.id} style={{ backgroundColor: "#1e1e2e" }}>
+                      <option key={c.id} value={c.id} style={{ backgroundColor: "var(--admin-bg)" }}>
                         {c.nombreEmpresa}
                       </option>
                     ))}
@@ -4681,7 +5113,7 @@ export default function AdminPage() {
           }}>
             {/* Cabecera */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexShrink: 0 }}>
-              <h2 style={{ fontSize: "1.3rem", fontWeight: "800", color: "#ffffff", margin: 0 }}>
+              <h2 style={{ fontSize: "1.3rem", fontWeight: "800", color: "var(--text-primary)", margin: 0 }}>
                 {selectedBlog ? "📝 Editar Artículo del Blog" : "✨ Revisar y Crear Artículo Generado"}
               </h2>
               <button
@@ -4784,7 +5216,7 @@ export default function AdminPage() {
                       fontFamily: "monospace",
                       fontSize: "0.8rem",
                       lineHeight: "1.4",
-                      backgroundColor: "#0f172a",
+                      backgroundColor: "var(--admin-bg)",
                       color: "#94a3b8",
                       border: "1px solid rgba(255,255,255,0.08)",
                       borderRadius: "8px",
@@ -4806,7 +5238,7 @@ export default function AdminPage() {
                     onChange={(e) => setBlogFormPublicado(e.target.checked)}
                     style={{ width: "18px", height: "18px", cursor: "pointer" }}
                   />
-                  <label htmlFor="blogFormPublicado" style={{ fontSize: "0.9rem", color: "#ffffff", fontWeight: "600", cursor: "pointer" }}>
+                  <label htmlFor="blogFormPublicado" style={{ fontSize: "0.9rem", color: "var(--text-primary)", fontWeight: "600", cursor: "pointer" }}>
                     🌐 Publicar inmediatamente en el sitio web público
                   </label>
                 </div>
@@ -4875,6 +5307,96 @@ export default function AdminPage() {
                 </div>
               </div>
 
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ==============================================
+          MODAL: CREAR / EDITAR RUBRO
+          ============================================== */}
+      {showRubroModal && (
+        <div className="modal-overlay" style={{ zIndex: 1100, padding: "20px" }}>
+          <div
+            className="modal-content"
+            style={{
+              maxWidth: "550px",
+              width: "95%",
+              padding: "24px",
+              border: "1px solid rgba(255,255,255,0.1)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+              <h2 style={{ fontSize: "1.3rem", fontWeight: "800", color: "var(--text-primary)", margin: 0 }}>
+                {editingRubro ? "✏️ Editar Rubro Económico" : "🏷️ Crear Nuevo Rubro"}
+              </h2>
+              <button
+                className="modal-close"
+                onClick={() => setShowRubroModal(false)}
+                style={{ fontSize: "1.8rem", color: "var(--text-secondary)", background: "transparent", border: "none", cursor: "pointer" }}
+              >
+                ×
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveRubro} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              <div className="admin-form-group">
+                <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: "600", marginBottom: "6px", display: "block" }}>
+                  Nombre del Rubro: <span style={{ color: "#ef4444" }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ej: Construcción e Inmobiliaria"
+                  value={rubroFormNombre}
+                  onChange={(e) => setRubroFormNombre(e.target.value)}
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: "8px", background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff" }}
+                />
+              </div>
+
+              <div className="admin-form-group">
+                <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: "600", marginBottom: "6px", display: "block" }}>
+                  Descripción / Alcance del Rubro:
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="Descripción detallada de los servicios, productos o subrubros abarcados..."
+                  value={rubroFormDescripcion}
+                  onChange={(e) => setRubroFormDescripcion(e.target.value)}
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: "8px", background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", resize: "vertical" }}
+                />
+              </div>
+
+              <div className="admin-form-group">
+                <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: "600", marginBottom: "6px", display: "block" }}>
+                  Plantilla de Email Sugerida:
+                </label>
+                <select
+                  value={rubroFormPlantilla}
+                  onChange={(e) => setRubroFormPlantilla(e.target.value)}
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: "8px", background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff" }}
+                >
+                  <option value="">-- Sin Plantilla Específica Asignada --</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.Rubro}>
+                      {t.Rubro} ({t.companyId || "Lezcom SpA"})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px", marginTop: "12px" }}>
+                <button
+                  type="button"
+                  className="btn-admin btn-admin-secondary"
+                  onClick={() => setShowRubroModal(false)}
+                >
+                  Cancelar
+                </button>
+                <button type="submit" className="btn-admin btn-admin-primary">
+                  {editingRubro ? "Guardar Cambios" : "Crear Rubro"}
+                </button>
+              </div>
             </form>
           </div>
         </div>
