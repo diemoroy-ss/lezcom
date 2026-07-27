@@ -700,7 +700,7 @@
   border: 1px solid var(--admin-border);
   border-radius: 8px;
   cursor: pointer;
-  background-color: rgba(255, 255, 255, 0.01);
+  background-color: var(--admin-bg);
   text-align: left;
   transition: all 0.2s;
 }
@@ -719,7 +719,7 @@
 .template-card-title {
   font-weight: 700;
   font-size: 0.9rem;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 
@@ -741,12 +741,14 @@
 }
 
 .preview-frame-header {
-  background-color: #111827;
+  background-color: var(--admin-bg);
   padding: 12px 20px;
   border-bottom: 1px solid var(--admin-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .preview-subject {

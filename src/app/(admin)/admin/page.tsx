@@ -2966,7 +2966,7 @@ export default function AdminPage() {
           <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
             {/* Métricas / Resumen de Rubros */}
             <div className="stats-grid">
-              <div className="stat-card blue">
+              <div className="glass-card stat-card blue">
                 <div className="stat-header">
                   <span className="stat-title">Total de Rubros</span>
                   <span className="stat-icon">🏷️</span>
@@ -2975,7 +2975,7 @@ export default function AdminPage() {
                 <div className="stat-desc">Sectores económicos detectados</div>
               </div>
 
-              <div className="stat-card green">
+              <div className="glass-card stat-card green">
                 <div className="stat-header">
                   <span className="stat-title">Con Plantilla Vinculada</span>
                   <span className="stat-icon">✅</span>
@@ -2986,7 +2986,7 @@ export default function AdminPage() {
                 <div className="stat-desc">Listos para envíos masivos</div>
               </div>
 
-              <div className="stat-card orange">
+              <div className="glass-card stat-card orange">
                 <div className="stat-header">
                   <span className="stat-title">Sin Plantilla</span>
                   <span className="stat-icon">⚠️</span>
@@ -2997,7 +2997,7 @@ export default function AdminPage() {
                 <div className="stat-desc">Requieren plantilla de correo</div>
               </div>
 
-              <div className="stat-card purple">
+              <div className="glass-card stat-card purple">
                 <div className="stat-header">
                   <span className="stat-title">Rubro Principal</span>
                   <span className="stat-icon">🏆</span>
