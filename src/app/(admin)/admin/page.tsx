@@ -81,7 +81,7 @@ interface Template {
   ultimoSync?: any;
   companyId?: string;
   tipoTemplate?: "base" | "seguimiento";
-  nroSeguimiento?: number;
+  nroSeguimiento?: number | null;
 }
 
 export interface CompanyConfig {
