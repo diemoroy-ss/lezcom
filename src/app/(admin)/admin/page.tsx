@@ -23,12 +23,24 @@ import {
 } from "firebase/firestore";
 
 // interfaces
+interface FollowUp {
+  nro: number;
+  fecha: any;
+  mensajeId: string | null;
+  templateId: string;
+  status: "enviado" | "fallido";
+  error?: string | null;
+}
+
 interface ContactTracking {
   estadoEnvio: "pendiente" | "enviando" | "enviado" | "fallido";
   ultimoEnvio: any;
   mensajeId: string | null;
   errorDetalle: string | null;
   intentos: number;
+  seguimientos?: FollowUp[];
+  respondio?: boolean;
+  notaRespuesta?: string;
 }
 
 interface Contact {
@@ -68,6 +80,8 @@ interface Template {
   TelefonoEjecutivo?: string;
   ultimoSync?: any;
   companyId?: string;
+  tipoTemplate?: "base" | "seguimiento";
+  nroSeguimiento?: number;
 }
 
 export interface CompanyConfig {
@@ -124,7 +138,7 @@ export interface RubroItem {
 
 export default function AdminPage() {
   // Pestaña Activa
-  const [activeTab, setActiveTab] = useState<"dashboard" | "contacts" | "rubros" | "templates" | "settings" | "blogs">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "contacts" | "rubros" | "templates" | "seguimiento" | "settings" | "blogs">("dashboard");
   const [settingsSubTab, setSettingsSubTab] = useState<"credentials" | "sync">("credentials");
 
   // Estados de Rubros CRUD
@@ -251,6 +265,24 @@ export default function AdminPage() {
   const [showDuplicateTemplateModal, setShowDuplicateTemplateModal] = useState(false);
   const [duplicateTemplateTargetCompanyId, setDuplicateTemplateTargetCompanyId] = useState("");
   const [templateToDuplicate, setTemplateToDuplicate] = useState<Template | null>(null);
+
+  // Template tipo (base/seguimiento) filter in templates tab
+  const [templateTypeFilter, setTemplateTypeFilter] = useState<"base" | "seguimiento">("base");
+  const [newTemplateTipo, setNewTemplateTipo] = useState<"base" | "seguimiento">("base");
+  const [newTemplateNroSeguimiento, setNewTemplateNroSeguimiento] = useState<number>(1);
+
+  // Seguimiento module states
+  const [seguimientoFilter, setSeguimientoFilter] = useState<"todos" | "sin-respuesta" | "con-respuesta" | "en-curso">("todos");
+  const [seguimientoRubroFilter, setSeguimientoRubroFilter] = useState("todos");
+  const [seguimientoSearch, setSeguimientoSearch] = useState("");
+  const [showFollowUpModal, setShowFollowUpModal] = useState<{ contact: Contact } | null>(null);
+  const [followUpSelectedTemplateId, setFollowUpSelectedTemplateId] = useState("");
+  const [isSendingFollowUp, setIsSendingFollowUp] = useState(false);
+  const [showMarkRespondioModal, setShowMarkRespondioModal] = useState<{ contact: Contact } | null>(null);
+  const [respondioNota, setRespondioNota] = useState("");
+  const [expandedFollowUpContactId, setExpandedFollowUpContactId] = useState<string | null>(null);
+  const [massSeguimientoConfirm, setMassSeguimientoConfirm] = useState<{ show: boolean; templateId: string; targetContacts: Contact[] } | null>(null);
+  const [isSendingMassSeguimiento, setIsSendingMassSeguimiento] = useState(false);
   const [newClientData, setNewClientData] = useState<Partial<Contact>>({
     Rut: "",
     RazonSocial: "",
@@ -709,6 +741,122 @@ export default function AdminPage() {
     setShowNewTemplateModal(true);
   };
 
+  // Enviar correo de seguimiento individual
+  const handleSendFollowUp = async (contact: Contact, templateId: string) => {
+    const db = (window as any).__firebase_db;
+    const activeCompany = companies.find(c => c.id === selectedCompanyId);
+    if (!activeCompany) { showNotificationModal("Error", "No hay empresa seleccionada.", "error"); return; }
+    const followTemplate = templates.find(t => t.id === templateId);
+    if (!followTemplate) { showNotificationModal("Error", "Plantilla de seguimiento no encontrada.", "error"); return; }
+
+    setIsSendingFollowUp(true);
+    const nro = (contact.tracking?.seguimientos?.length || 0) + 1;
+    let newFollowUp: FollowUp;
+
+    try {
+      const renderedHtml = renderTemplateWithVariables(followTemplate.Template, contact);
+      let subject = `Seguimiento ${nro} - ${contact.RazonSocial}`;
+      const titleMatch = followTemplate.Template.match(/<title>([^<]+)<\/title>/i);
+      if (titleMatch?.[1]) subject = titleMatch[1];
+
+      const response = await fetch("/api/admin/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey: activeCompany.brevoApiKey,
+          sender: { name: activeCompany.senderName, email: activeCompany.senderEmail },
+          to: { email: contact.EMAIL, name: contact.Representante },
+          subject, htmlContent: renderedHtml
+        })
+      });
+      const res = await response.json();
+      if (!response.ok) throw new Error(res.error || "Error desconocido");
+
+      newFollowUp = { nro, fecha: new Date(), mensajeId: res.messageId, templateId, status: "enviado" };
+      showNotificationModal("¡Seguimiento Enviado!", `Seguimiento #${nro} enviado a ${contact.EMAIL}`, "success");
+    } catch (err: any) {
+      newFollowUp = { nro, fecha: new Date(), mensajeId: null, templateId, status: "fallido", error: err.message };
+      showNotificationModal("Error", `No se pudo enviar el seguimiento: ${err.message}`, "error");
+    }
+
+    const updatedSeguimientos = [...(contact.tracking?.seguimientos || []), newFollowUp];
+    const updatedTracking = { ...contact.tracking, seguimientos: updatedSeguimientos };
+
+    if (db) {
+      try {
+        await updateDoc(doc(db, "contacts", contact.id), { tracking: updatedTracking });
+      } catch (e) { console.error(e); }
+    }
+    setContacts(prev => prev.map(c => c.id === contact.id ? { ...c, tracking: updatedTracking } : c));
+    setIsSendingFollowUp(false);
+    setShowFollowUpModal(null);
+    setFollowUpSelectedTemplateId("");
+  };
+
+  // Marcar que un contacto respondió
+  const handleMarkRespondio = async (contact: Contact, respondio: boolean, nota: string) => {
+    const db = (window as any).__firebase_db;
+    const updatedTracking = { ...contact.tracking, respondio, notaRespuesta: nota };
+    if (db) {
+      try { await updateDoc(doc(db, "contacts", contact.id), { tracking: updatedTracking }); } catch (e) { console.error(e); }
+    }
+    setContacts(prev => prev.map(c => c.id === contact.id ? { ...c, tracking: updatedTracking } : c));
+    setShowMarkRespondioModal(null);
+    setRespondioNota("");
+    showNotificationModal(respondio ? "✅ Marcado como Respondido" : "Marcación Revertida", `${contact.RazonSocial} actualizado.`, "success");
+  };
+
+  // Envío masivo de seguimiento
+  const handleSendMassSeguimiento = async (targetContacts: Contact[], templateId: string) => {
+    const db = (window as any).__firebase_db;
+    const activeCompany = companies.find(c => c.id === selectedCompanyId);
+    if (!activeCompany) return;
+    const followTemplate = templates.find(t => t.id === templateId);
+    if (!followTemplate) return;
+
+    setIsSendingMassSeguimiento(true);
+    setMassSeguimientoConfirm(null);
+    let sent = 0, failed = 0;
+
+    for (const contact of targetContacts) {
+      const nro = (contact.tracking?.seguimientos?.length || 0) + 1;
+      let newFollowUp: FollowUp;
+      try {
+        const renderedHtml = renderTemplateWithVariables(followTemplate.Template, contact);
+        let subject = `Seguimiento ${nro} - ${contact.RazonSocial}`;
+        const titleMatch = followTemplate.Template.match(/<title>([^<]+)<\/title>/i);
+        if (titleMatch?.[1]) subject = titleMatch[1];
+        const response = await fetch("/api/admin/send-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            apiKey: activeCompany.brevoApiKey,
+            sender: { name: activeCompany.senderName, email: activeCompany.senderEmail },
+            to: { email: contact.EMAIL, name: contact.Representante },
+            subject, htmlContent: renderedHtml
+          })
+        });
+        const res = await response.json();
+        if (!response.ok) throw new Error(res.error || "Error");
+        newFollowUp = { nro, fecha: new Date(), mensajeId: res.messageId, templateId, status: "enviado" };
+        sent++;
+      } catch (err: any) {
+        newFollowUp = { nro, fecha: new Date(), mensajeId: null, templateId, status: "fallido", error: err.message };
+        failed++;
+      }
+      const updatedTracking = { ...contact.tracking, seguimientos: [...(contact.tracking?.seguimientos || []), newFollowUp] };
+      if (db) {
+        try { await updateDoc(doc(db, "contacts", contact.id), { tracking: updatedTracking }); } catch (e) { console.error(e); }
+      }
+      setContacts(prev => prev.map(c => c.id === contact.id ? { ...c, tracking: updatedTracking } : c));
+      await new Promise(r => setTimeout(r, 300));
+    }
+    setIsSendingMassSeguimiento(false);
+    showNotificationModal("Seguimiento Masivo Completado", `✅ Enviados: ${sent} | ❌ Fallidos: ${failed}`, "success");
+  };
+
+
+
   // Abrir modal de nuevo o editar rubro
   const handleOpenRubroModal = (item?: RubroItem) => {
     if (item) {
@@ -1019,7 +1167,9 @@ export default function AdminPage() {
     try {
       const activeCompany = selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom";
       const baseRubroId = rubroVal.toLowerCase().trim().replace(/[^a-z0-9]/g, "_");
-      const docId = editingTemplateId || `${baseRubroId}_${activeCompany}`;
+      // For seguimiento templates, include the follow-up number in the ID to allow multiple per rubro
+      const tipoSuffix = newTemplateTipo === "seguimiento" ? `_seg${newTemplateNroSeguimiento}` : "";
+      const docId = editingTemplateId || `${baseRubroId}${tipoSuffix}_${activeCompany}`;
       const docRef = doc(db, "templates", docId);
 
       const newTempObj = {
@@ -1028,7 +1178,9 @@ export default function AdminPage() {
         Ejecutivo: newTemplateEjecutivo,
         TelefonoEjecutivo: newTemplateTelefono,
         ultimoSync: new Date(),
-        companyId: activeCompany
+        companyId: activeCompany,
+        tipoTemplate: newTemplateTipo,
+        nroSeguimiento: newTemplateTipo === "seguimiento" ? newTemplateNroSeguimiento : null
       };
 
       await setDoc(docRef, newTempObj, { merge: true });
@@ -2366,7 +2518,10 @@ export default function AdminPage() {
   const filteredTemplates = templates.filter(temp => {
     const tempCompId = temp.companyId || "default_lezcom";
     const targetCompId = selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom";
-    return tempCompId === targetCompId;
+    if (tempCompId !== targetCompId) return false;
+    // Filter by tipo: default to "base" if not set
+    const tempTipo = temp.tipoTemplate || "base";
+    return tempTipo === templateTypeFilter;
   });
 
 
@@ -2404,7 +2559,13 @@ export default function AdminPage() {
             className={`nav-item ${activeTab === "templates" ? "active" : ""}`}
             onClick={() => setActiveTab("templates")}
           >
-            📄 Plantillas ({templates.length})
+            📄 Plantillas ({templates.filter(t => !t.tipoTemplate || t.tipoTemplate === "base").length})
+          </button>
+          <button
+            className={`nav-item ${activeTab === "seguimiento" ? "active" : ""}`}
+            onClick={() => setActiveTab("seguimiento")}
+          >
+            📨 Seguimiento ({contacts.filter(c => c.tracking?.estadoEnvio === "enviado").length})
           </button>
           <button
             className={`nav-item ${activeTab === "blogs" ? "active" : ""}`}
@@ -3232,6 +3393,24 @@ export default function AdminPage() {
                     ))}
                   </select>
                 </div>
+                {/* Tipo filter */}
+                <div style={{ display: "flex", gap: "6px" }}>
+                  {(["base", "seguimiento"] as const).map(tipo => (
+                    <button key={tipo} type="button" onClick={() => setTemplateTypeFilter(tipo)}
+                      style={{
+                        padding: "6px 14px", borderRadius: "8px", border: "1px solid",
+                        borderColor: templateTypeFilter === tipo ? (tipo === "base" ? "#3b82f6" : "#8b5cf6") : "rgba(255,255,255,0.15)",
+                        background: templateTypeFilter === tipo ? (tipo === "base" ? "rgba(59,130,246,0.15)" : "rgba(139,92,246,0.15)") : "transparent",
+                        color: templateTypeFilter === tipo ? (tipo === "base" ? "#60a5fa" : "#a78bfa") : "var(--text-secondary)",
+                        fontWeight: "600", fontSize: "0.8rem", cursor: "pointer", transition: "all 0.2s"
+                      }}
+                    >
+                      {tipo === "base"
+                        ? `📄 Base (${templates.filter(t => (t.tipoTemplate || "base") === "base" && (t.companyId || "default_lezcom") === (selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom")).length})`
+                        : `📨 Seguimiento (${templates.filter(t => t.tipoTemplate === "seguimiento" && (t.companyId || "default_lezcom") === (selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom")).length})`}
+                    </button>
+                  ))}
+                </div>
               </div>
               <button
                 className="btn-admin btn-admin-primary"
@@ -3258,6 +3437,9 @@ export default function AdminPage() {
                   setNewTemplateEjecutivo("Gabriel Muñoz");
                   setNewTemplateTelefono("+56 9 1234 5678");
                   setEditorPreviewContactId("");
+                  setNewTemplateTipo(templateTypeFilter === "seguimiento" ? "seguimiento" : "base");
+                  setNewTemplateNroSeguimiento(1);
+                  setEditingTemplateId(null);
                   setShowNewTemplateModal(true);
                 }}
               >
@@ -3368,6 +3550,270 @@ export default function AdminPage() {
             )}
           </div>
         )}
+        {/* ==============================================
+            VISTA: SEGUIMIENTO DE CORREOS
+            ============================================== */}
+        {activeTab === "seguimiento" && (() => {
+          const companyId = selectedCompanyId || "default_lezcom";
+          // Solo contactos que recibieron el correo base
+          const enviados = contacts.filter(c =>
+            c.tracking?.estadoEnvio === "enviado" &&
+            (selectedCompanyId ? true : true)
+          );
+          // Templates de seguimiento de la empresa activa
+          const seguimientoTemplates = templates.filter(t =>
+            t.tipoTemplate === "seguimiento" &&
+            (t.companyId || "default_lezcom") === companyId
+          );
+          const rubrosConSeguimiento = Array.from(new Set(seguimientoTemplates.map(t => t.Rubro))).sort();
+
+          // Filtrar enviados
+          let filteredEnviados = enviados;
+          if (seguimientoFilter === "sin-respuesta") filteredEnviados = enviados.filter(c => !c.tracking?.respondio);
+          if (seguimientoFilter === "con-respuesta") filteredEnviados = enviados.filter(c => c.tracking?.respondio);
+          if (seguimientoFilter === "en-curso") filteredEnviados = enviados.filter(c => (c.tracking?.seguimientos?.length || 0) > 0 && !c.tracking?.respondio);
+          if (seguimientoRubroFilter !== "todos") filteredEnviados = filteredEnviados.filter(c => c.Rubro.toLowerCase().trim() === seguimientoRubroFilter.toLowerCase().trim());
+          if (seguimientoSearch) filteredEnviados = filteredEnviados.filter(c =>
+            c.RazonSocial?.toLowerCase().includes(seguimientoSearch.toLowerCase()) ||
+            c.EMAIL?.toLowerCase().includes(seguimientoSearch.toLowerCase())
+          );
+
+          const totalRespondio = enviados.filter(c => c.tracking?.respondio).length;
+          const totalEnCurso = enviados.filter(c => (c.tracking?.seguimientos?.length || 0) > 0 && !c.tracking?.respondio).length;
+          const totalSinContacto = enviados.filter(c => !c.tracking?.respondio && (c.tracking?.seguimientos?.length || 0) === 0).length;
+
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+              {/* Métricas */}
+              <div className="stats-grid">
+                <div className="glass-card stat-card blue">
+                  <div className="stat-header"><span className="stat-title">Total Enviados</span><span className="stat-icon">📤</span></div>
+                  <div className="stat-value">{enviados.length}</div>
+                  <div className="stat-desc">Correos base entregados</div>
+                </div>
+                <div className="glass-card stat-card green">
+                  <div className="stat-header"><span className="stat-title">Respondieron</span><span className="stat-icon">✅</span></div>
+                  <div className="stat-value">{totalRespondio}</div>
+                  <div className="stat-desc">Clientes con respuesta</div>
+                </div>
+                <div className="glass-card stat-card orange">
+                  <div className="stat-header"><span className="stat-title">En Seguimiento</span><span className="stat-icon">📨</span></div>
+                  <div className="stat-value">{totalEnCurso}</div>
+                  <div className="stat-desc">Con seguimientos activos</div>
+                </div>
+                <div className="glass-card stat-card purple">
+                  <div className="stat-header"><span className="stat-title">Sin Contacto</span><span className="stat-icon">⏳</span></div>
+                  <div className="stat-value">{totalSinContacto}</div>
+                  <div className="stat-desc">Pendientes de seguimiento</div>
+                </div>
+              </div>
+
+              {/* Controles */}
+              <div className="glass-card">
+                <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center", marginBottom: "16px" }}>
+                  <div className="admin-search-input" style={{ flex: 1, minWidth: "200px", maxWidth: "300px" }}>
+                    <span className="search-icon">🔍</span>
+                    <input type="text" placeholder="Buscar empresa o email..." value={seguimientoSearch} onChange={e => setSeguimientoSearch(e.target.value)} />
+                  </div>
+                  <select className="select-admin" value={seguimientoFilter} onChange={e => setSeguimientoFilter(e.target.value as any)}>
+                    <option value="todos">-- Todos los estados --</option>
+                    <option value="sin-respuesta">Sin Respuesta</option>
+                    <option value="con-respuesta">Respondieron</option>
+                    <option value="en-curso">En Seguimiento</option>
+                  </select>
+                  <select className="select-admin" value={seguimientoRubroFilter} onChange={e => setSeguimientoRubroFilter(e.target.value)}>
+                    <option value="todos">-- Todos los Rubros --</option>
+                    {Array.from(new Set(enviados.map(c => c.Rubro))).sort().map(r => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
+
+                  {/* Envío masivo */}
+                  {seguimientoTemplates.length > 0 && (
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center", marginLeft: "auto" }}>
+                      <select
+                        className="select-admin"
+                        id="mass-followup-template-select"
+                        style={{ minWidth: "200px" }}
+                        defaultValue=""
+                      >
+                        <option value="">-- Seleccionar Plantilla de Seguimiento --</option>
+                        {seguimientoTemplates.map(t => (
+                          <option key={t.id} value={t.id}>{t.Rubro} — Seguimiento #{t.nroSeguimiento || 1}</option>
+                        ))}
+                      </select>
+                      <button
+                        className="btn-admin btn-admin-primary"
+                        disabled={isSendingMassSeguimiento}
+                        onClick={() => {
+                          const sel = (document.getElementById("mass-followup-template-select") as HTMLSelectElement)?.value;
+                          if (!sel) { showNotificationModal("Atención", "Selecciona una plantilla de seguimiento.", "error"); return; }
+                          const targets = filteredEnviados.filter(c => !c.tracking?.respondio && (c.tracking?.seguimientos?.length || 0) < 5);
+                          setMassSeguimientoConfirm({ show: true, templateId: sel, targetContacts: targets });
+                        }}
+                      >
+                        {isSendingMassSeguimiento ? "⏳ Enviando..." : `📨 Enviar Masivo (${filteredEnviados.filter(c => !c.tracking?.respondio && (c.tracking?.seguimientos?.length || 0) < 5).length})`}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Tabla */}
+                {filteredEnviados.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "40px 0", color: "var(--text-secondary)" }}>
+                    📭 No hay correos enviados que coincidan con los filtros seleccionados.
+                  </div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="admin-table">
+                      <thead>
+                        <tr>
+                          <th>Empresa / Email</th>
+                          <th>Rubro</th>
+                          <th>Correo Enviado</th>
+                          <th>Seguimientos</th>
+                          <th>Estado</th>
+                          <th>Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredEnviados.map(contact => {
+                          const segs = contact.tracking?.seguimientos || [];
+                          const maxSegs = 5;
+                          const canSendMore = segs.length < maxSegs && !contact.tracking?.respondio;
+                          const followTemplatesForRubro = seguimientoTemplates.filter(t =>
+                            t.Rubro.toLowerCase().trim() === contact.Rubro.toLowerCase().trim()
+                          );
+                          const isExpanded = expandedFollowUpContactId === contact.id;
+                          return (
+                            <>
+                              <tr key={contact.id} style={{ cursor: "pointer" }}>
+                                <td>
+                                  <div style={{ fontWeight: "700", color: "var(--text-primary)", fontSize: "0.9rem" }}>{contact.RazonSocial}</div>
+                                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{contact.EMAIL}</div>
+                                </td>
+                                <td>
+                                  <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>{contact.Rubro}</span>
+                                </td>
+                                <td>
+                                  <div style={{ fontSize: "0.8rem" }}>
+                                    {contact.tracking?.ultimoEnvio
+                                      ? new Date(contact.tracking.ultimoEnvio?.seconds ? contact.tracking.ultimoEnvio.seconds * 1000 : contact.tracking.ultimoEnvio).toLocaleDateString("es-CL")
+                                      : "—"}
+                                  </div>
+                                </td>
+                                <td>
+                                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                    <span style={{
+                                      fontWeight: "700", fontSize: "1rem",
+                                      color: segs.length === 0 ? "var(--text-muted)" : segs.length >= 4 ? "#ef4444" : "#f59e0b"
+                                    }}>
+                                      {segs.length}/{maxSegs}
+                                    </span>
+                                    <div style={{ display: "flex", gap: "2px" }}>
+                                      {Array.from({ length: maxSegs }).map((_, i) => (
+                                        <div key={i} style={{
+                                          width: "10px", height: "10px", borderRadius: "50%",
+                                          background: i < segs.length
+                                            ? (segs[i].status === "enviado" ? "#10b981" : "#ef4444")
+                                            : "rgba(255,255,255,0.1)"
+                                        }} title={i < segs.length ? `#${i + 1}: ${segs[i].status}` : `Seguimiento #${i + 1} pendiente`} />
+                                      ))}
+                                    </div>
+                                  </div>
+                                </td>
+                                <td>
+                                  {contact.tracking?.respondio ? (
+                                    <span className="status-badge status-enviado">✅ Respondió</span>
+                                  ) : segs.length > 0 ? (
+                                    <span className="status-badge" style={{ background: "rgba(245,158,11,0.15)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.3)" }}>📨 En Seguimiento</span>
+                                  ) : (
+                                    <span className="status-badge" style={{ background: "rgba(100,116,139,0.15)", color: "#94a3b8", border: "1px solid rgba(100,116,139,0.2)" }}>⏳ Sin Seguimiento</span>
+                                  )}
+                                </td>
+                                <td>
+                                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                                    {canSendMore && (
+                                      <button
+                                        className="btn-admin btn-admin-primary"
+                                        style={{ padding: "5px 10px", fontSize: "0.78rem" }}
+                                        onClick={() => { setShowFollowUpModal({ contact }); setFollowUpSelectedTemplateId(followTemplatesForRubro[0]?.id || ""); }}
+                                        title={followTemplatesForRubro.length === 0 ? "No hay plantillas de seguimiento para este rubro" : "Enviar seguimiento"}
+                                        disabled={followTemplatesForRubro.length === 0}
+                                      >
+                                        📨 Seguimiento #{segs.length + 1}
+                                      </button>
+                                    )}
+                                    {!contact.tracking?.respondio ? (
+                                      <button
+                                        className="btn-admin btn-admin-success"
+                                        style={{ padding: "5px 10px", fontSize: "0.78rem" }}
+                                        onClick={() => { setShowMarkRespondioModal({ contact }); setRespondioNota(contact.tracking?.notaRespuesta || ""); }}
+                                      >
+                                        ✅ Respondió
+                                      </button>
+                                    ) : (
+                                      <button
+                                        className="btn-admin btn-admin-secondary"
+                                        style={{ padding: "5px 10px", fontSize: "0.78rem" }}
+                                        onClick={() => handleMarkRespondio(contact, false, "")}
+                                      >
+                                        ↩️ Revertir
+                                      </button>
+                                    )}
+                                    {segs.length > 0 && (
+                                      <button
+                                        className="btn-admin"
+                                        style={{ padding: "5px 10px", fontSize: "0.78rem" }}
+                                        onClick={() => setExpandedFollowUpContactId(isExpanded ? null : contact.id)}
+                                      >
+                                        {isExpanded ? "🔼 Ocultar" : "👁️ Ver Historial"}
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                              {/* Fila expandida con historial */}
+                              {isExpanded && (
+                                <tr key={`${contact.id}-expanded`}>
+                                  <td colSpan={6} style={{ background: "rgba(0,0,0,0.05)", padding: "12px 20px" }}>
+                                    <div style={{ fontSize: "0.85rem", fontWeight: "700", marginBottom: "8px", color: "var(--text-secondary)" }}>
+                                      Historial de Seguimientos — {contact.RazonSocial}
+                                    </div>
+                                    {contact.tracking?.notaRespuesta && (
+                                      <div style={{ marginBottom: "8px", padding: "8px 12px", background: "rgba(16,185,129,0.1)", borderRadius: "6px", fontSize: "0.82rem", color: "#10b981" }}>
+                                        💬 Nota de respuesta: {contact.tracking.notaRespuesta}
+                                      </div>
+                                    )}
+                                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                      {segs.map(s => {
+                                        const tName = templates.find(t => t.id === s.templateId)?.Rubro || "Desconocida";
+                                        const fecha = s.fecha?.seconds ? new Date(s.fecha.seconds * 1000).toLocaleString("es-CL") : new Date(s.fecha).toLocaleString("es-CL");
+                                        return (
+                                          <div key={s.nro} style={{ display: "flex", gap: "10px", alignItems: "center", padding: "6px 10px", borderRadius: "6px", background: s.status === "enviado" ? "rgba(16,185,129,0.08)" : "rgba(239,68,68,0.08)" }}>
+                                            <span style={{ fontWeight: "700", minWidth: "90px" }}>Seguimiento #{s.nro}</span>
+                                            <span style={{ color: s.status === "enviado" ? "#10b981" : "#ef4444" }}>{s.status === "enviado" ? "✅ Enviado" : "❌ Fallido"}</span>
+                                            <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>{fecha}</span>
+                                            <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>Plantilla: {tName}</span>
+                                            {s.error && <span style={{ color: "#ef4444", fontSize: "0.78rem" }}>Error: {s.error}</span>}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
         {/* ============================================== */}
 
         {/* ==============================================
@@ -4620,6 +5066,48 @@ export default function AdminPage() {
               {/* Lado izquierdo: Inputs y Textarea */}
               <div style={{ display: "flex", flexDirection: "column", gap: "16px", minHeight: 0 }}>
 
+                {/* Tipo de Plantilla */}
+                <div className="admin-form-group" style={{ margin: 0, flexShrink: 0 }}>
+                  <label style={{ color: "var(--text-secondary)", fontWeight: "600", fontSize: "0.85rem" }}>
+                    Tipo de Plantilla:
+                  </label>
+                  <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+                    {(["base", "seguimiento"] as const).map(tipo => (
+                      <button
+                        key={tipo}
+                        type="button"
+                        onClick={() => setNewTemplateTipo(tipo)}
+                        style={{
+                          padding: "8px 16px", borderRadius: "8px", border: "1px solid",
+                          borderColor: newTemplateTipo === tipo ? (tipo === "base" ? "#3b82f6" : "#8b5cf6") : "rgba(255,255,255,0.15)",
+                          background: newTemplateTipo === tipo ? (tipo === "base" ? "rgba(59,130,246,0.15)" : "rgba(139,92,246,0.15)") : "transparent",
+                          color: newTemplateTipo === tipo ? (tipo === "base" ? "#60a5fa" : "#a78bfa") : "var(--text-secondary)",
+                          fontWeight: "600", fontSize: "0.85rem", cursor: "pointer", transition: "all 0.2s"
+                        }}
+                      >
+                        {tipo === "base" ? "📄 Base (Inicial)" : "📨 Seguimiento"}
+                      </button>
+                    ))}
+                    {newTemplateTipo === "seguimiento" && (
+                      <select
+                        className="select-admin"
+                        value={newTemplateNroSeguimiento}
+                        onChange={e => setNewTemplateNroSeguimiento(Number(e.target.value))}
+                        style={{ minWidth: "130px" }}
+                      >
+                        {[1, 2, 3, 4, 5].map(n => (
+                          <option key={n} value={n}>Seguimiento #{n}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                  {newTemplateTipo === "seguimiento" && (
+                    <p style={{ fontSize: "0.78rem", color: "#a78bfa", marginTop: "6px" }}>
+                      ⚠️ Las plantillas de seguimiento <strong>no</strong> se usan en envíos masivos iniciales. Solo están disponibles en el módulo de Seguimiento.
+                    </p>
+                  )}
+                </div>
+
                 {/* Selector de Rubro y Previsualización de Clientes */}
                 <div style={{ display: "flex", flexDirection: "column", gap: "16px", flexShrink: 0 }}>
                   <div className="admin-form-group" style={{ margin: 0 }}>
@@ -4981,6 +5469,145 @@ export default function AdminPage() {
         </div>
       )}
 
+
+      {/* ==============================================
+          MODAL: ENVIAR SEGUIMIENTO INDIVIDUAL
+          ============================================== */}
+      {showFollowUpModal && (() => {
+        const contact = showFollowUpModal.contact;
+        const segs = contact.tracking?.seguimientos || [];
+        const nro = segs.length + 1;
+        const companyId = selectedCompanyId || "default_lezcom";
+        const followTemplatesForRubro = templates.filter(t =>
+          t.tipoTemplate === "seguimiento" &&
+          (t.companyId || "default_lezcom") === companyId &&
+          t.Rubro.toLowerCase().trim() === contact.Rubro.toLowerCase().trim()
+        );
+        const allFollowTemplates = templates.filter(t =>
+          t.tipoTemplate === "seguimiento" &&
+          (t.companyId || "default_lezcom") === companyId
+        );
+        return (
+          <div className="modal-overlay" style={{ zIndex: 1200 }}>
+            <div className="modal-content" style={{ maxWidth: "500px", border: "1px solid rgba(255,255,255,0.1)" }}>
+              <div className="modal-header">
+                <h2>📨 Enviar Seguimiento #{nro}</h2>
+                <button className="modal-close" onClick={() => { setShowFollowUpModal(null); setFollowUpSelectedTemplateId(""); }}>×</button>
+              </div>
+              <div style={{ padding: "0 0 16px 0" }}>
+                <div style={{ marginBottom: "16px", padding: "12px", background: "rgba(255,255,255,0.04)", borderRadius: "8px" }}>
+                  <div style={{ fontWeight: "700", fontSize: "0.95rem" }}>{contact.RazonSocial}</div>
+                  <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "4px" }}>{contact.EMAIL} • {contact.Rubro}</div>
+                  <div style={{ marginTop: "8px", display: "flex", gap: "4px" }}>
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <div key={i} style={{ width: "12px", height: "12px", borderRadius: "50%", background: i < segs.length ? (segs[i].status === "enviado" ? "#10b981" : "#ef4444") : "rgba(255,255,255,0.1)" }} />
+                    ))}
+                    <span style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginLeft: "6px" }}>{segs.length}/5 enviados</span>
+                  </div>
+                </div>
+                <div className="admin-form-group" style={{ marginBottom: "16px" }}>
+                  <label style={{ fontWeight: "600", fontSize: "0.85rem", color: "var(--text-secondary)" }}>Plantilla de Seguimiento:</label>
+                  {followTemplatesForRubro.length === 0 ? (
+                    <div style={{ padding: "12px", background: "rgba(239,68,68,0.1)", borderRadius: "8px", fontSize: "0.85rem", color: "#ef4444", marginTop: "6px" }}>
+                      ⚠️ No hay plantillas de seguimiento creadas para el rubro <strong>{contact.Rubro}</strong>. Crea una desde la pestaña Plantillas usando el tipo "Seguimiento".
+                    </div>
+                  ) : (
+                    <select
+                      className="select-admin"
+                      style={{ width: "100%", marginTop: "6px" }}
+                      value={followUpSelectedTemplateId}
+                      onChange={e => setFollowUpSelectedTemplateId(e.target.value)}
+                    >
+                      <option value="">-- Seleccionar Plantilla de Seguimiento --</option>
+                      {followTemplatesForRubro.map(t => (
+                        <option key={t.id} value={t.id}>Seguimiento #{t.nroSeguimiento || 1} — {t.Rubro}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+                  <button className="btn-admin btn-admin-secondary" onClick={() => { setShowFollowUpModal(null); setFollowUpSelectedTemplateId(""); }}>Cancelar</button>
+                  <button
+                    className="btn-admin btn-admin-primary"
+                    disabled={!followUpSelectedTemplateId || isSendingFollowUp || followTemplatesForRubro.length === 0}
+                    onClick={() => handleSendFollowUp(contact, followUpSelectedTemplateId)}
+                  >
+                    {isSendingFollowUp ? "⏳ Enviando..." : `📨 Enviar Seguimiento #${nro}`}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ==============================================
+          MODAL: MARCAR RESPONDIÓ
+          ============================================== */}
+      {showMarkRespondioModal && (
+        <div className="modal-overlay" style={{ zIndex: 1200 }}>
+          <div className="modal-content" style={{ maxWidth: "420px", border: "1px solid rgba(255,255,255,0.1)" }}>
+            <div className="modal-header">
+              <h2>✅ Marcar como Respondido</h2>
+              <button className="modal-close" onClick={() => { setShowMarkRespondioModal(null); setRespondioNota(""); }}>×</button>
+            </div>
+            <div style={{ padding: "0 0 16px 0" }}>
+              <div style={{ marginBottom: "16px", padding: "12px", background: "rgba(255,255,255,0.04)", borderRadius: "8px" }}>
+                <div style={{ fontWeight: "700" }}>{showMarkRespondioModal.contact.RazonSocial}</div>
+                <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>{showMarkRespondioModal.contact.EMAIL}</div>
+              </div>
+              <div className="admin-form-group" style={{ marginBottom: "16px" }}>
+                <label style={{ fontWeight: "600", fontSize: "0.85rem", color: "var(--text-secondary)" }}>Nota sobre la respuesta (opcional):</label>
+                <textarea
+                  className="input-admin-text"
+                  rows={3}
+                  placeholder="Ej: Interesado en reunión, pidió cotización, respondió negativamente..."
+                  value={respondioNota}
+                  onChange={e => setRespondioNota(e.target.value)}
+                  style={{ width: "100%", marginTop: "6px", resize: "vertical" }}
+                />
+              </div>
+              <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+                <button className="btn-admin btn-admin-secondary" onClick={() => { setShowMarkRespondioModal(null); setRespondioNota(""); }}>Cancelar</button>
+                <button className="btn-admin btn-admin-success" onClick={() => handleMarkRespondio(showMarkRespondioModal.contact, true, respondioNota)}>
+                  ✅ Confirmar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==============================================
+          MODAL: CONFIRMAR ENVÍO MASIVO SEGUIMIENTO
+          ============================================== */}
+      {massSeguimientoConfirm?.show && (
+        <div className="modal-overlay" style={{ zIndex: 1200 }}>
+          <div className="modal-content" style={{ maxWidth: "450px", border: "1px solid rgba(255,255,255,0.1)" }}>
+            <div className="modal-header">
+              <h2>📨 Confirmar Envío Masivo</h2>
+              <button className="modal-close" onClick={() => setMassSeguimientoConfirm(null)}>×</button>
+            </div>
+            <div style={{ padding: "0 0 16px 0" }}>
+              <div style={{ marginBottom: "16px", lineHeight: 1.6 }}>
+                <p>Se enviará el seguimiento a <strong>{massSeguimientoConfirm.targetContacts.length} contactos</strong> que no han respondido y no han alcanzado el límite de 5 seguimientos.</p>
+                <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                  Plantilla: <strong>{templates.find(t => t.id === massSeguimientoConfirm.templateId)?.Rubro || "—"}</strong> (Seguimiento #{templates.find(t => t.id === massSeguimientoConfirm.templateId)?.nroSeguimiento || 1})
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+                <button className="btn-admin btn-admin-secondary" onClick={() => setMassSeguimientoConfirm(null)}>Cancelar</button>
+                <button
+                  className="btn-admin btn-admin-primary"
+                  onClick={() => handleSendMassSeguimiento(massSeguimientoConfirm.targetContacts, massSeguimientoConfirm.templateId)}
+                >
+                  📨 Confirmar y Enviar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ==============================================
           MODAL: DUPLICAR PLANTILLA A OTRA EMPRESA
