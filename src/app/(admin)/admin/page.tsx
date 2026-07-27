@@ -2503,8 +2503,7 @@ export default function AdminPage() {
               const currentTemplates = templates.filter(t => (t.companyId || "default_lezcom") === selectedCompanyId);
               const validRubros = new Set(currentTemplates.map(t => t.Rubro));
               const currentLogs = historicalLogs.filter(l => 
-                (l.companyId === selectedCompanyId) || 
-                (!l.companyId && (selectedCompanyId === "default_lezcom" || validRubros.has(l.areaTemplate)))
+                (l.companyId || "default_lezcom") === selectedCompanyId
               );
 
               return (
