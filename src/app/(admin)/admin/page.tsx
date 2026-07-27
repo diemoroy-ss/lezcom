@@ -3031,7 +3031,7 @@ export default function AdminPage() {
                     style={{ maxWidth: "300px" }}
                   >
                     <option value="">-- Todos los Rubros --</option>
-                    {Array.from(new Set(rubros.map(r => r.nombre))).sort().map(r => (
+                    {Array.from(new Set(getCombinedRubros().map(r => r.nombre))).sort().map(r => (
                       <option key={r} value={r}>{r}</option>
                     ))}
                   </select>
