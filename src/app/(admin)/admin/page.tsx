@@ -1913,13 +1913,21 @@ export default function AdminPage() {
       // Buscar plantilla por Rubro (con soporte hacia atrás)
       // Buscamos coincidencia flexible
       const rubroSanitizado = (contact.Rubro || "").toLowerCase().trim();
-      const template = templates.find(t =>
+      let template = templates.find(t =>
         (t.Rubro || "").toLowerCase().trim() === rubroSanitizado &&
         (t.companyId || "default_lezcom") === (selectedCompanyId || "default_lezcom")
       );
 
+      // Fallback a plantilla genérica de la misma empresa
       if (!template) {
-        addLog(`[ERROR] No se encontró plantilla compatible para el Rubro '${contact.Rubro}'.`, "error");
+        template = templates.find(t =>
+          (t.Rubro || "").toLowerCase().trim() === "genérico" &&
+          (t.companyId || "default_lezcom") === (selectedCompanyId || "default_lezcom")
+        );
+      }
+
+      if (!template) {
+        addLog(`[ERROR] No se encontró plantilla compatible ni genérica para el Rubro '${contact.Rubro}'.`, "error");
         localFailedCount++;
         setCampaignFailedCount(localFailedCount);
 
@@ -3081,8 +3089,11 @@ export default function AdminPage() {
                     <tbody>
                       {filteredRubros.map((item) => {
                         const currentCompany = selectedCompanyId || "default_lezcom";
-                        const hasTemplate = templates.some(
+                        const hasSpecificTemplate = templates.some(
                           (t) => t.Rubro.toLowerCase().trim() === item.nombre.toLowerCase().trim() && (t.companyId || "default_lezcom") === currentCompany
+                        );
+                        const hasGenericTemplate = templates.some(
+                          (t) => t.Rubro.toLowerCase().trim() === "genérico" && (t.companyId || "default_lezcom") === currentCompany
                         );
                         return (
                           <tr key={item.id}>
@@ -3108,12 +3119,19 @@ export default function AdminPage() {
                               </span>
                             </td>
                             <td>
-                              {hasTemplate ? (
+                              {hasSpecificTemplate ? (
                                 <span
                                   className="status-badge status-enviado"
                                   style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
                                 >
-                                  ✅ Plantilla ({companies.find(c => c.id === currentCompany)?.nombreEmpresa || "General"})
+                                  ✅ Específica ({companies.find(c => c.id === currentCompany)?.nombreEmpresa || "General"})
+                                </span>
+                              ) : hasGenericTemplate ? (
+                                <span
+                                  className="status-badge status-enviado"
+                                  style={{ display: "inline-flex", alignItems: "center", gap: "6px", backgroundColor: "rgba(139, 92, 246, 0.15)", color: "var(--accent-purple)", borderColor: "rgba(139, 92, 246, 0.3)" }}
+                                >
+                                  ☑️ Genérica ({companies.find(c => c.id === currentCompany)?.nombreEmpresa || "General"})
                                 </span>
                               ) : (
                                 <span
@@ -3149,7 +3167,7 @@ export default function AdminPage() {
                                   onClick={() => handleCreateTemplateFromRubro(item.nombre)}
                                   title="Crear o editar plantilla de correo"
                                 >
-                                  📄 {hasTemplate ? "Editar Plantilla" : "Añadir Plantilla"}
+                                  📄 {hasSpecificTemplate ? "Editar Plantilla" : "Añadir Plantilla"}
                                 </button>
                                 <button
                                   className="btn-admin btn-admin-primary"
@@ -4629,7 +4647,8 @@ export default function AdminPage() {
                         disabled={editingTemplateId !== null}
                       >
                         <option value="">-- Selecciona un Rubro existente --</option>
-                        {existingRubros.map((rubro) => (
+                        <option value="Genérico">🌍 Genérico (Para cualquier rubro sin plantilla)</option>
+                        {existingRubros.filter(r => r !== "Genérico").map((rubro) => (
                           <option key={rubro} value={rubro}>{rubro}</option>
                         ))}
                         <option value="__new_rubro__">➕ Crear Nuevo Rubro...</option>
