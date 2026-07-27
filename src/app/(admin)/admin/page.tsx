@@ -650,7 +650,8 @@ export default function AdminPage() {
       newSelected[c.id] = true;
     });
     setSelectedContacts(newSelected);
-    setSearchQuery(rubroNombre);
+    setSearchQuery("");
+    setRubroFilter(rubroNombre);
     setActiveTab("contacts");
     
     showNotificationModal(
@@ -3014,15 +3015,26 @@ export default function AdminPage() {
             <div className="glass-card">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
                 <div style={{ display: "flex", gap: "12px", alignItems: "center", flex: 1, minWidth: "280px" }}>
-                  <div className="admin-search-input" style={{ width: "100%", maxWidth: "400px" }}>
+                  <div className="admin-search-input" style={{ width: "100%", maxWidth: "300px" }}>
                     <span className="search-icon">🔍</span>
                     <input
                       type="text"
-                      placeholder="Buscar rubro por nombre o descripción..."
+                      placeholder="Buscar por texto..."
                       value={rubroSearchTerm}
                       onChange={(e) => setRubroSearchTerm(e.target.value)}
                     />
                   </div>
+                  <select
+                    className="select-admin"
+                    value={rubroSearchTerm}
+                    onChange={(e) => setRubroSearchTerm(e.target.value)}
+                    style={{ maxWidth: "300px" }}
+                  >
+                    <option value="">-- Todos los Rubros --</option>
+                    {Array.from(new Set(rubros.map(r => r.nombre))).sort().map(r => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
@@ -3101,14 +3113,14 @@ export default function AdminPage() {
                                   className="status-badge status-enviado"
                                   style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
                                 >
-                                  ✅ Plantilla Vinculada
+                                  ✅ Plantilla ({companies.find(c => c.id === currentCompany)?.nombreEmpresa || "General"})
                                 </span>
                               ) : (
                                 <span
                                   className="status-badge status-fallido"
                                   style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
                                 >
-                                  ⚠️ Sin Plantilla
+                                  ⚠️ Sin Plantilla ({companies.find(c => c.id === currentCompany)?.nombreEmpresa || "General"})
                                 </span>
                               )}
                             </td>
@@ -3123,6 +3135,7 @@ export default function AdminPage() {
                                   className="btn-admin"
                                   style={{ padding: "6px 10px", fontSize: "0.8rem" }}
                                   onClick={() => {
+                                    setSearchQuery("");
                                     setRubroFilter(item.nombre);
                                     setActiveTab("contacts");
                                   }}
@@ -4570,8 +4583,13 @@ export default function AdminPage() {
             border: "1px solid rgba(255,255,255,0.1)",
             padding: "24px"
           }}>
-            <div className="modal-header" style={{ marginBottom: "16px", flexShrink: 0 }}>
-              <h2>{editingTemplateId ? "📝 Editar Plantilla de Correo HTML" : "➕ Crear Nueva Plantilla de Correo HTML"}</h2>
+            <div className="modal-header" style={{ marginBottom: "16px", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
+                <h2>{editingTemplateId ? "📝 Editar Plantilla de Correo HTML" : "➕ Crear Nueva Plantilla de Correo HTML"}</h2>
+                <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)", background: "rgba(255,255,255,0.05)", padding: "4px 10px", borderRadius: "20px" }}>
+                  🏢 Empresa Destino: <strong style={{ color: "var(--text-primary)" }}>{companies.find(c => c.id === (selectedCompanyIdForTemplates || selectedCompanyId || "default_lezcom"))?.nombreEmpresa || "General"}</strong>
+                </div>
+              </div>
               <button className="modal-close" onClick={() => {
                 setShowNewTemplateModal(false);
                 setEditingTemplateId(null);
@@ -4585,7 +4603,7 @@ export default function AdminPage() {
               <div style={{ display: "flex", flexDirection: "column", gap: "16px", minHeight: 0 }}>
 
                 {/* Selector de Rubro y Previsualización de Clientes */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", flexShrink: 0 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "16px", flexShrink: 0 }}>
                   <div className="admin-form-group" style={{ margin: 0 }}>
                     <label style={{ color: "var(--text-secondary)", fontWeight: "600", fontSize: "0.85rem" }}>
                       Asociar a Rubro:
@@ -4632,9 +4650,9 @@ export default function AdminPage() {
                     )}
                   </div>
 
-                  <div className="admin-form-group" style={{ margin: 0 }}>
+                  <div className="admin-form-group" style={{ flex: 1, minWidth: "220px", margin: 0 }}>
                     <label style={{ color: "var(--text-secondary)", fontWeight: "600", fontSize: "0.85rem" }}>
-                      👤 Previsualizar con Datos de un Cliente del Rubro:
+                      👤 Previsualizar Cliente:
                     </label>
                     <select
                       className="select-admin"
@@ -4659,7 +4677,7 @@ export default function AdminPage() {
                 </div>
 
                 {/* Campos de Ejecutivo y Teléfono */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", flexShrink: 0 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "16px", flexShrink: 0 }}>
                   <div className="admin-form-group" style={{ margin: 0 }}>
                     <label style={{ color: "var(--text-secondary)", fontWeight: "600", fontSize: "0.85rem" }}>
                       👤 Nombre del Ejecutivo Comercial:
