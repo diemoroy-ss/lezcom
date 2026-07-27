@@ -650,7 +650,7 @@ export default function AdminPage() {
       newSelected[c.id] = true;
     });
     setSelectedContacts(newSelected);
-    setSearchTerm(rubroNombre);
+    setSearchQuery(rubroNombre);
     setActiveTab("contacts");
     
     showNotificationModal(
